@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "name": "real_text_http",
+      "kind": "capture",
+      "file": "real_text_http.sse",
+      "provenance": "Installed Codex 0.144.6 HTTP capture captures/codex-live-text-http-uncompressed.ndjson, SHA-256 2a7503a32b3921d9700a04d214143d15933c4cd8db8182a4cf725ff3134fec2d; distilled, redacted event sequence."
+    },
+    {
+      "name": "real_tool_roundtrip",
+      "kind": "capture",
+      "file": "real_tool_roundtrip.sse",
+      "provenance": "Installed Codex 0.144.6 HTTP/SSE recording-proxy capture codex-live-tools.ndjson, SHA-256 f590da177728ce788e183ea9c18df9b5b6aab49c5ca7fd99d9bac26c307974fe; distilled, redacted two-turn Responses sequence: reasoning then exec_command, matching function_call_output in the next full-history request, then final assistant message."
+    },
+    {
+      "name": "real_parallel_function_calls",
+      "kind": "capture",
+      "file": "real_parallel_function_calls.sse",
+      "provenance": "Installed Codex 0.144.6 HTTP/SSE recording-proxy capture codex-live-parallel-function-calls.ndjson, SHA-256 fca22c3bb2a6ef2010f541197493a11d183f221fbc04eb6ee8979aba12dabe09; distilled, redacted sequence with reasoning and lookup calls for FIRST and SECOND before response.completed."
+    },
+    {
+      "name": "real_web_search",
+      "kind": "capture",
+      "file": "real_web_search.sse",
+      "provenance": "Installed Codex 0.144.6 HTTP/SSE recording-proxy capture codex-live-web-search.ndjson, SHA-256 bb66eacccaf704c2338446a07ada850b40bd6258e6dd21d2680cf440bf6c9086; distilled, redacted sequence with reasoning, web search action, follow-up reasoning, final message, and completed usage."
+    },
+    {
+      "name": "real_dog_image",
+      "kind": "capture",
+      "file": "real_dog_image.sse",
+      "provenance": "Installed Codex 0.144.6 HTTP/SSE recording-proxy capture codex-live-dog-image.ndjson, SHA-256 cb9f1a20728afcc99838498406fdb7dbdad4afb5c928e2295e1604eae7f6ea39; distilled, redacted response to an owner-supplied 600x400 JPEG (22,590 bytes), with request image omitted as [REDACTED_IMAGE_BYTES], identifying a Great Dane."
+    },
+    {
+      "name": "regression_credited_rate_limit",
+      "kind": "regression",
+      "file": "regression_credited_rate_limit.sse",
+      "provenance": "raine/claude-code-proxy PR #68, commit f6e208b, tests/smoke_cutover.rs:228-234; exact credited-rate-limit event sequence."
+    },
+    {
+      "name": "regression_terminal_only_completed",
+      "kind": "regression",
+      "file": "regression_terminal_only_completed.sse",
+      "provenance": "raine/claude-code-proxy PR #70, commit a1b60a0, smoke_codex_websocket_empty_completions_exhaust_to_service_unavailable; terminal-only response.completed, 10 retries plus initial attempt = 11."
+    },
+    {
+      "name": "regression_terminal_only_done",
+      "kind": "regression",
+      "file": "regression_terminal_only_done.sse",
+      "provenance": "raine/claude-code-proxy PR #71, commit 7b932b4, terminal_only_done_upstream_is_empty_completion; terminal-only response.done."
+    },
+    {
+      "name": "regression_incomplete",
+      "kind": "regression",
+      "file": "regression_incomplete.sse",
+      "provenance": "raine/claude-code-proxy PR #71, commit 7b932b4, terminal_only_incomplete_upstream_is_not_empty_completion; response.incomplete remains non-retryable."
+    }
+  ]
+}

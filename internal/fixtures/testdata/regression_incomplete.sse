@@ -1,0 +1,3 @@
+event: response.incomplete
+data: {"type":"response.incomplete","response":{"id":"[REDACTED]","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{}}}
+

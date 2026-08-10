@@ -1,0 +1,187 @@
+{
+  "client_version": "0.144.6",
+  "backend": "https://chatgpt.com/backend-api/codex",
+  "models": [
+    {
+      "slug": "gpt-5.6-sol",
+      "display_name": "GPT-5.6-Sol",
+      "description": "Latest frontier agentic coding model.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" },
+        { "effort": "max", "description": "Maximum reasoning depth for the hardest problems" },
+        { "effort": "ultra", "description": "Maximum reasoning with automatic task delegation" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": ["fast"],
+      "service_tiers": [
+        { "id": "priority", "name": "Fast", "description": "1.5x speed, increased usage" }
+      ],
+      "default_service_tier": "priority",
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": true,
+      "visibility": "list",
+      "priority": 1
+    },
+    {
+      "slug": "gpt-5.6-terra",
+      "display_name": "GPT-5.6-Terra",
+      "description": "Balanced agentic coding model for everyday work.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" },
+        { "effort": "max", "description": "Maximum reasoning depth for the hardest problems" },
+        { "effort": "ultra", "description": "Maximum reasoning with automatic task delegation" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": ["fast"],
+      "service_tiers": [
+        { "id": "priority", "name": "Fast", "description": "1.5x speed, increased usage" }
+      ],
+      "default_service_tier": "priority",
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": true,
+      "visibility": "list",
+      "priority": 2
+    },
+    {
+      "slug": "gpt-5.6-luna",
+      "display_name": "GPT-5.6-Luna",
+      "description": "Fast and affordable agentic coding model.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" },
+        { "effort": "max", "description": "Maximum reasoning depth for the hardest problems" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": ["fast"],
+      "service_tiers": [
+        { "id": "priority", "name": "Fast", "description": "1.5x speed, increased usage" }
+      ],
+      "default_service_tier": "priority",
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": true,
+      "visibility": "list",
+      "priority": 3
+    },
+    {
+      "slug": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "description": "Frontier model for complex coding, research, and real-world work.",
+      "default_reasoning_level": "xhigh",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": ["fast"],
+      "service_tiers": [
+        { "id": "priority", "name": "Fast", "description": "1.5x speed, increased usage" }
+      ],
+      "default_service_tier": "priority",
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": false,
+      "visibility": "list",
+      "priority": 7
+    },
+    {
+      "slug": "gpt-5.4",
+      "display_name": "GPT-5.4",
+      "description": "Strong model for everyday coding.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 1000000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": ["fast"],
+      "service_tiers": [
+        { "id": "priority", "name": "Fast", "description": "1.5x speed, increased usage" }
+      ],
+      "default_service_tier": "priority",
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": false,
+      "visibility": "list",
+      "priority": 16
+    },
+    {
+      "slug": "gpt-5.4-mini",
+      "display_name": "GPT-5.4-Mini",
+      "description": "Small, fast, and cost-efficient model for simpler coding tasks.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": [],
+      "service_tiers": [],
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": false,
+      "visibility": "list",
+      "priority": 23
+    },
+    {
+      "slug": "codex-auto-review",
+      "display_name": "Codex Auto Review",
+      "description": "Automatic approval review model for Codex.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast responses with lighter reasoning" },
+        { "effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks" },
+        { "effort": "high", "description": "Greater reasoning depth for complex problems" },
+        { "effort": "xhigh", "description": "Extra high reasoning depth for complex problems" }
+      ],
+      "context_window": 272000,
+      "max_context_window": 1000000,
+      "effective_context_window_percent": 95,
+      "additional_speed_tiers": [],
+      "service_tiers": [],
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": true,
+      "input_modalities": ["text", "image"],
+      "use_responses_lite": false,
+      "visibility": "hide",
+      "priority": 43
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"[REDACTED]","type":"reasoning","encrypted_content":"[REDACTED]","summary":[],"content":[]}}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","sequence_number":5,"item_id":"[REDACTED]","output_index":0,"summary_index":0,"text":"**Implementing parallel lookup calls**"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"[REDACTED]","type":"reasoning","encrypted_content":"[REDACTED]","summary":[{"type":"summary_text","text":"**Implementing parallel lookup calls**"}],"content":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":8,"output_index":1,"item":{"id":"[REDACTED]","type":"function_call","status":"in_progress","call_id":"call_pPjUcB7YQAzjsrCqZMNFSb76","name":"lookup","arguments":""}}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":10,"item_id":"[REDACTED]","output_index":1,"arguments":"{\"label\":\"FIRST\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":11,"output_index":1,"item":{"id":"[REDACTED]","type":"function_call","status":"completed","call_id":"call_pPjUcB7YQAzjsrCqZMNFSb76","name":"lookup","arguments":"{\"label\":\"FIRST\"}"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":12,"output_index":2,"item":{"id":"[REDACTED]","type":"function_call","status":"in_progress","call_id":"call_9TUpiLhd0rskL8wXXbIA56Di","name":"lookup","arguments":""}}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":14,"item_id":"[REDACTED]","output_index":2,"arguments":"{\"label\":\"SECOND\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":15,"output_index":2,"item":{"id":"[REDACTED]","type":"function_call","status":"completed","call_id":"call_9TUpiLhd0rskL8wXXbIA56Di","name":"lookup","arguments":"{\"label\":\"SECOND\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":16,"response":{"id":"[REDACTED]","status":"completed","usage":{"input_tokens":81,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":71,"output_tokens_details":{"reasoning_tokens":23},"total_tokens":152}}}
+

@@ -1,0 +1,7 @@
+*.go text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mod text eol=lf
+*.sse text eol=lf
+*.sum text eol=lf
+*.yml text eol=lf

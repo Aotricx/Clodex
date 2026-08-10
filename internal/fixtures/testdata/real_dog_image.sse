@@ -1,0 +1,21 @@
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"[REDACTED]","type":"reasoning","encrypted_content":"[REDACTED]","summary":[],"content":[]}}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","sequence_number":5,"item_id":"[REDACTED]","output_index":0,"summary_index":0,"text":"**Identifying dog breed as Great Dane**"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"[REDACTED]","type":"reasoning","encrypted_content":"[REDACTED]","summary":[{"type":"summary_text","text":"**Identifying dog breed as Great Dane**"}],"content":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":8,"output_index":1,"item":{"id":"[REDACTED]","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":17,"item_id":"[REDACTED]","output_index":1,"content_index":0,"text":"This is a Great Dane dog."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":19,"output_index":1,"item":{"id":"[REDACTED]","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"This is a Great Dane dog.","annotations":[],"logprobs":[]}]}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":20,"response":{"id":"[REDACTED]","status":"completed","usage":{"input_tokens":330,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":26,"output_tokens_details":{"reasoning_tokens":13},"total_tokens":356}}}
+

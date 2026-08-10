@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish static binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Build six static binaries and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          while read -r goos goarch; do
+            suffix=""
+            if [[ "$goos" == "windows" ]]; then
+              suffix=".exe"
+            fi
+            asset="clodex-${goos}-${goarch}${suffix}"
+            echo "Building ${goos}/${goarch} -> dist/${asset}"
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+              go build -trimpath \
+                -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+                -o "dist/${asset}" ./cmd/clodex
+            (
+              cd dist
+              sha256sum "$asset" > "${asset}.sha256"
+            )
+          done <<'TARGETS'
+          darwin amd64
+          darwin arm64
+          linux amd64
+          linux arm64
+          windows amd64
+          windows arm64
+          TARGETS
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 12
+          (
+            cd dist
+            sha256sum --check ./*.sha256
+          )
+
+      - name: Create verified draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --draft \
+            --generate-notes \
+            --title "Clodex ${GITHUB_REF_NAME}"
+
+      - name: Verify all assets and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort > actual-assets.txt
+          sort > expected-assets.txt <<'ASSETS'
+          clodex-darwin-amd64
+          clodex-darwin-amd64.sha256
+          clodex-darwin-arm64
+          clodex-darwin-arm64.sha256
+          clodex-linux-amd64
+          clodex-linux-amd64.sha256
+          clodex-linux-arm64
+          clodex-linux-arm64.sha256
+          clodex-windows-amd64.exe
+          clodex-windows-amd64.exe.sha256
+          clodex-windows-arm64.exe
+          clodex-windows-arm64.exe.sha256
+          ASSETS
+          diff -u expected-assets.txt actual-assets.txt
+          gh release edit "$GITHUB_REF_NAME" --draft=false

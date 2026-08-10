@@ -1,0 +1,3 @@
+event: response.done
+data: {"type":"response.done","response":{"id":"[REDACTED]","status":"completed","usage":{}}}
+
