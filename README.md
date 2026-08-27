@@ -1,5 +1,9 @@
 # Clodex
 
+<p align="center">
+  <img src="docs/assets/blue-claude.png" alt="Blue Claude logo" width="240">
+</p>
+
 Clodex lets you run **GPT/Codex models inside Claude Code** — same terminal harness, same tool
 use, same agentic loop, different model underneath. It's a local proxy: Claude Code speaks the
 Anthropic Messages API on one side, the ChatGPT Codex backend
