@@ -32,6 +32,7 @@ type MessageRequest struct {
 type Message struct {
 	Role    string
 	Content []ContentBlock
+	Raw     json.RawMessage
 }
 
 // ContentBlock is the ordered content union. Unknown and server-side variants
@@ -107,12 +108,14 @@ type ToolChoice struct {
 	Type                   string
 	Name                   string
 	DisableParallelToolUse *bool
+	Raw                    json.RawMessage
 }
 
 type ThinkingConfig struct {
 	Type         string
 	BudgetTokens int64
 	Display      string
+	Raw          json.RawMessage
 }
 
 type Metadata struct {
@@ -123,6 +126,7 @@ type Metadata struct {
 type CacheControl struct {
 	Type string
 	TTL  string
+	Raw  json.RawMessage
 }
 
 // ErrorResponse is the Anthropic JSON error envelope.

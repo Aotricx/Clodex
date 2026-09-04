@@ -314,6 +314,134 @@ func TestClientReusesDefaultHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestClientRejectsSuccessWithoutEventStream(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+	}{
+		{name: "json", contentType: "application/json", body: `{"ok":true,"choices":[]}`},
+		{name: "html", contentType: "text/html", body: `<html><body>ok</body></html>`},
+		{name: "empty content-type", contentType: "", body: `{"ok":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.contentType != "" {
+					w.Header().Set("Content-Type", tt.contentType)
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+
+			client := testClient(t, server)
+			response, err := client.Stream(context.Background(), Session{SessionID: "s", ThreadID: "t"}, codexwire.Request{Model: "m"})
+			if err != nil {
+				t.Fatalf("Stream error = %v, want (response, nil) like other non-2xx protocol failures", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				t.Fatalf("StatusCode = %d, want non-2xx so engine uses failure.FromHTTP", response.StatusCode)
+			}
+			if response.StatusCode != http.StatusUnsupportedMediaType {
+				t.Fatalf("StatusCode = %d, want 415 Unsupported Media Type", response.StatusCode)
+			}
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(body), "event:") {
+				t.Fatalf("returned body looks like SSE: %q", body)
+			}
+		})
+	}
+}
+
+func TestClientAcceptsEventStreamWithCharsetParameter(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+	}))
+	defer server.Close()
+
+	client := testClient(t, server)
+	response, err := client.Stream(context.Background(), Session{SessionID: "s", ThreadID: "t"}, codexwire.Request{Model: "m"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200 for text/event-stream with charset", response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil || !strings.Contains(string(body), "response.completed") {
+		t.Fatalf("body = %q, %v", body, err)
+	}
+}
+
+func TestClientSkipsWireDumpWhenDoCanceledOrDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		want error
+		arm  func(started <-chan struct{}) (context.Context, context.CancelFunc)
+	}{
+		{
+			name: "canceled",
+			want: context.Canceled,
+			arm: func(started <-chan struct{}) (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				go func() {
+					<-started
+					cancel()
+				}()
+				return ctx, cancel
+			},
+		},
+		{
+			name: "deadline exceeded",
+			want: context.DeadlineExceeded,
+			arm: func(started <-chan struct{}) (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+				go func() {
+					<-started
+					// Deadline is already armed; RoundTrip waits on ctx.Done().
+				}()
+				return ctx, cancel
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			started := make(chan struct{})
+			dumpDir := t.TempDir()
+			client := testClientWithoutServer(t)
+			client.DumpDir = dumpDir
+			client.Endpoint = "http://127.0.0.1/backend-api/codex/responses"
+			client.HTTPClient = &http.Client{Transport: &blockingRoundTripper{started: started}}
+			ctx, cancel := tt.arm(started)
+			defer cancel()
+
+			_, err := client.Stream(ctx, Session{SessionID: "s", ThreadID: "t"}, codexwire.Request{Model: "m"})
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Stream error = %v, want %v", err, tt.want)
+			}
+			files, globErr := filepath.Glob(filepath.Join(dumpDir, "*.wire.json"))
+			if globErr != nil {
+				t.Fatal(globErr)
+			}
+			if len(files) != 0 {
+				t.Fatalf("wire dumps after %v = %#v, want none", tt.want, files)
+			}
+		})
+	}
+}
+
 func TestDumpFailureNeverMasksRealUpstreamResponse(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +501,17 @@ type requestCapture struct {
 	path   string
 	header http.Header
 	body   []byte
+}
+
+type blockingRoundTripper struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (t *blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.once.Do(func() { close(t.started) })
+	<-req.Context().Done()
+	return nil, req.Context().Err()
 }
 
 func testClient(t *testing.T, server *httptest.Server) *Client {

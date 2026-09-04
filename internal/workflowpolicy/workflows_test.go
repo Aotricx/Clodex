@@ -19,17 +19,65 @@ func TestRepositoryPinsCrossPlatformTextFilesToLF(t *testing.T) {
 	}
 }
 
+func TestWorkflowUsesLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want string
+		ok   bool
+	}{
+		{
+			name: "compact list form",
+			line: "- uses: actions/cache@v4",
+			want: "actions/cache@v4",
+			ok:   true,
+		},
+		{
+			name: "indented uses",
+			line: "        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+			want: "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+			ok:   true,
+		},
+		{
+			name: "indented list form",
+			line: "      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0",
+			want: "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0",
+			ok:   true,
+		},
+		{
+			name: "not a uses line",
+			line: "        run: go test ./...",
+			want: "",
+			ok:   false,
+		},
+		{
+			name: "uses as substring",
+			line: "cache-uses: something",
+			want: "",
+			ok:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := workflowUsesLine(tt.line)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("workflowUsesLine(%q) = %q, %v; want %q, %v", tt.line, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestWorkflowsUseOnlyCommitPinnedFirstPartyActions(t *testing.T) {
+	pinned := regexp.MustCompile(`^actions/(checkout|setup-go)@([0-9a-f]{40})(?:\s+#.*)?$`)
 	for _, name := range []string{"test.yml", "release.yml"} {
 		contents := readRepoFile(t, filepath.Join(".github", "workflows", name))
 		for lineNumber, line := range strings.Split(contents, "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "uses:") {
+			usesValue, ok := workflowUsesLine(line)
+			if !ok {
 				continue
 			}
-			match := regexp.MustCompile(`^uses: actions/(checkout|setup-go)@([0-9a-f]{40})(?:\s+#.*)?$`).FindStringSubmatch(line)
-			if match == nil {
-				t.Errorf("%s:%d has unapproved or unpinned action: %s", name, lineNumber+1, line)
+			if !pinned.MatchString(usesValue) {
+				t.Errorf("%s:%d has unapproved or unpinned action: %s", name, lineNumber+1, usesValue)
 			}
 		}
 	}
@@ -107,4 +155,14 @@ func linePresent(contents, want string) bool {
 		}
 	}
 	return false
+}
+
+func workflowUsesLine(line string) (usesValue string, ok bool) {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "- ")
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "uses:") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(line, "uses:")), true
 }

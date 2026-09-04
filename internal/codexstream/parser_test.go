@@ -115,6 +115,18 @@ func TestParserHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestParserTreatsTrailingCommentAfterTerminalAsEOF(t *testing.T) {
+	input := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n: keepalive\n"
+	p := New(context.Background(), strings.NewReader(input), Options{})
+	event, err := p.Next()
+	if err != nil || event.Type != TypeResponseCompleted {
+		t.Fatalf("terminal = %#v, %v", event, err)
+	}
+	if _, err := p.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after trailing comment = %v, want io.EOF", err)
+	}
+}
+
 func TestParserDistinguishesTruncatedAndTerminalLessEOF(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -305,6 +317,32 @@ func TestTypedDecodeHelpersCoverPinnedEventFamilies(t *testing.T) {
 				got, err := event.DecodeRateLimits()
 				if err != nil || string(got.RateLimits) != `{"limit_reached":true}` || string(got.Credits) != `{"has_credits":true}` {
 					t.Fatalf("DecodeRateLimits = %#v, %v", got, err)
+				}
+			},
+		},
+		{
+			name:  "refusal delta",
+			input: `{"type":"response.refusal.delta","item_id":"i1","output_index":0,"content_index":0,"delta":"cannot"}`,
+			check: func(t *testing.T, event Event) {
+				if !event.Known() {
+					t.Fatal("response.refusal.delta should be a known event type")
+				}
+				got, err := event.DecodeText()
+				if err != nil || got.Delta != "cannot" || got.ItemID != "i1" {
+					t.Fatalf("DecodeText refusal delta = %#v, %v", got, err)
+				}
+			},
+		},
+		{
+			name:  "refusal done",
+			input: `{"type":"response.refusal.done","item_id":"i1","output_index":0,"content_index":0,"text":"cannot"}`,
+			check: func(t *testing.T, event Event) {
+				if !event.Known() {
+					t.Fatal("response.refusal.done should be a known event type")
+				}
+				got, err := event.DecodeText()
+				if err != nil || got.Text != "cannot" || got.ItemID != "i1" {
+					t.Fatalf("DecodeText refusal done = %#v, %v", got, err)
 				}
 			},
 		},

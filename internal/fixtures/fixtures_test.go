@@ -286,6 +286,10 @@ func TestLoadRejectsSecrets(t *testing.T) {
 		{name: "refresh token", payload: `{"refresh_token":"live-refresh-token"}`},
 		{name: "account", payload: `{"account_id":"account-123"}`},
 		{name: "email", payload: `{"email":"person@example.com"}`},
+		{name: "id token", payload: `{"id_token":"live-id-token"}`},
+		{name: "client secret", payload: `{"client_secret":"live-client-secret"}`},
+		{name: "chatgpt account id", payload: `{"chatgpt_account_id":"acct-live-id"}`},
+		{name: "generic token", payload: `{"token":"live-generic-token"}`},
 	}
 
 	for _, tt := range tests {

@@ -53,6 +53,31 @@ func TestPrepareUsesOneCatalogGroundedPathForMessagesAndCounting(t *testing.T) {
 	}
 }
 
+func TestPrepareDisabledThinkingStillEmitsCatalogReasoning(t *testing.T) {
+	cat, err := catalog.LoadFallback()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := anthropic.DecodeRequest(strings.NewReader(`{
+		"model":"gpt-5.6-sol","max_tokens":1,
+		"messages":[{"role":"user","content":"x"}],
+		"thinking":{"type":"disabled"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := Prepare(cat, req, "gpt-5.6-sol", "")
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if prepared.Selection.Effort == "" || prepared.Translation.Request.Reasoning == nil || prepared.Translation.Request.Reasoning.Effort == "" {
+		t.Fatalf("disabled thinking omitted reasoning: selection=%#v reasoning=%#v", prepared.Selection, prepared.Translation.Request.Reasoning)
+	}
+	if warningCount(prepared.Translation.Warnings, translate.WarningThinkingTypeUnsupported) != 1 {
+		t.Fatalf("warnings = %#v, want thinking.type_unsupported", prepared.Translation.Warnings)
+	}
+}
+
 func TestPrepareMapsHugeThinkingBudgetWithoutIntegerOverflow(t *testing.T) {
 	cat, err := catalog.LoadFallback()
 	if err != nil {

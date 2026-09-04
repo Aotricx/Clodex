@@ -171,6 +171,12 @@ func (c *Coordinator) refreshIf(
 	if err := contextError(ctx); err != nil {
 		return Credentials{}, err
 	}
+	held, err := lockAuth(ctx, c.Store.Path)
+	if err != nil {
+		return Credentials{}, err
+	}
+	defer func() { _ = held.Unlock() }()
+
 	base, err := c.Store.Read()
 	if err != nil {
 		return Credentials{}, err

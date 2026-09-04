@@ -51,12 +51,13 @@ type CatalogResolver interface {
 
 // Command is one directly spawned executable. Args excludes argv[0].
 type Command struct {
-	Path   string
-	Args   []string
-	Env    []string
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	Path               string
+	Args               []string
+	Env                []string
+	Stdin              io.Reader
+	Stdout             io.Writer
+	Stderr             io.Writer
+	DetachProcessGroup bool
 }
 
 // Process is the lifecycle surface required from a spawned child.
@@ -331,6 +332,7 @@ func spawnCommand(ctx context.Context, command Command) (Process, error) {
 	child := exec.CommandContext(ctx, command.Path, command.Args...)
 	child.Env = append([]string(nil), command.Env...)
 	child.Stdin, child.Stdout, child.Stderr = command.Stdin, command.Stdout, command.Stderr
+	child.SysProcAttr = processGroupSysProcAttr(command.DetachProcessGroup)
 	if err := child.Start(); err != nil {
 		return nil, err
 	}

@@ -110,6 +110,70 @@ func TestDefaultPathsUseUserHomeAndCodexInteropFiles(t *testing.T) {
 	}
 }
 
+func TestServeStartsWithPathOverridesWhenHomeDirFails(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Port = 0
+	ready := make(chan net.Addr, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, ServeOptions{
+			Config: cfg, Version: "test",
+			AuthPath: filepath.Join(root, "missing", "auth.json"), CatalogPath: filepath.Join(root, "models.json"), DumpDir: filepath.Join(root, "wire"),
+			HomeDir: func() (string, error) { return "", os.ErrNotExist },
+			Ready:   func(address net.Addr) { ready <- address }, Stderr: io.Discard,
+		})
+	}()
+	select {
+	case <-ready:
+		cancel()
+	case err := <-done:
+		t.Fatalf("Serve() error = %v", err)
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("Serve did not become ready")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not stop")
+	}
+}
+
+func TestServeRejectsUnknownSmallFastModelAgainstFallbackCatalog(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Port = 0
+	cfg.SmallFastModel = "not-a-catalog-model:low"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, ServeOptions{
+			Config: cfg, Version: "test",
+			AuthPath: filepath.Join(root, "missing", "auth.json"), CatalogPath: filepath.Join(root, "models.json"), DumpDir: filepath.Join(root, "wire"),
+			Ready: func(address net.Addr) { ready <- address }, Stderr: io.Discard,
+		})
+	}()
+	select {
+	case address := <-ready:
+		cancel()
+		t.Fatalf("Serve started on %v with unknown small fast model", address)
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not-a-catalog-model") {
+			t.Fatalf("Serve() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("Serve did not return")
+	}
+}
+
 func TestServeRejectsCorruptExistingAuthInsteadOfMaskingIt(t *testing.T) {
 	root := t.TempDir()
 	authPath := filepath.Join(root, "auth.json")

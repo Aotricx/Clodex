@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Aotricx/Clodex/internal/catalog"
+	"github.com/Aotricx/Clodex/internal/codexwire"
 	clodexstatus "github.com/Aotricx/Clodex/internal/status"
 	"github.com/Aotricx/Clodex/internal/tokenizer"
 )
@@ -122,6 +123,66 @@ func TestHandlerModelsAndCapturedClaudeCountTokensRequest(t *testing.T) {
 	if snapshot.Catalog.Source != string(catalog.SourceFallback) || snapshot.TranslationWarnings.ByKind["request.max_tokens_unsupported"] != 0 {
 		t.Fatalf("status after count = %#v", snapshot)
 	}
+}
+
+func TestCountTokensPromptCacheKeyMatchesMessagesSession(t *testing.T) {
+	counter := &recordingCounter{}
+	handler, err := New(Options{
+		Version:      "test-version",
+		Status:       clodexstatus.New("test-version"),
+		Catalog:      fallbackResolver(t),
+		Counter:      counter,
+		DefaultModel: "gpt-5.6-sol:medium",
+		Messages:     http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionHeader := "session-count"
+	countBody := `{"model":"gpt-5.4-mini:low","messages":[{"role":"user","content":[{"type":"text","text":"count","cache_control":{"type":"ephemeral"}}]}]}`
+	countRequest := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(countBody))
+	countRequest.Header.Set("Content-Type", "application/json")
+	countRequest.Header.Set("x-claude-code-session-id", sessionHeader)
+	countResponse := httptest.NewRecorder()
+	handler.ServeHTTP(countResponse, countRequest)
+	if countResponse.Code != http.StatusOK {
+		t.Fatalf("count_tokens = %d %s", countResponse.Code, countResponse.Body.String())
+	}
+
+	transport := &messageTransport{body: messageSuccessSSE("counted")}
+	service := testMessagesService(t, transport)
+	messageBody := `{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"count","cache_control":{"type":"ephemeral"}}]}]}`
+	messageRequest := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(messageBody))
+	messageRequest.Header.Set("Content-Type", "application/json")
+	messageRequest.Header.Set("x-claude-code-session-id", sessionHeader)
+	messageResponse := httptest.NewRecorder()
+	service.ServeHTTP(messageResponse, messageRequest)
+	if messageResponse.Code != http.StatusOK {
+		t.Fatalf("messages = %d %s", messageResponse.Code, messageResponse.Body.String())
+	}
+	requests := transport.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("messages upstream requests = %d", len(requests))
+	}
+	if counter.request.PromptCacheKey == "" || counter.request.PromptCacheKey != requests[0].PromptCacheKey {
+		t.Fatalf("count_tokens prompt_cache_key = %q, messages = %q", counter.request.PromptCacheKey, requests[0].PromptCacheKey)
+	}
+	session, err := service.session(sessionHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counter.request.PromptCacheKey != session.ThreadID {
+		t.Fatalf("count_tokens prompt_cache_key = %q, want thread %q", counter.request.PromptCacheKey, session.ThreadID)
+	}
+}
+
+type recordingCounter struct {
+	request codexwire.Request
+}
+
+func (counter *recordingCounter) CountRequest(request codexwire.Request) (int, error) {
+	counter.request = request
+	return 1, nil
 }
 
 func TestHandlerValidatesMethodsContentTypeAndJSON(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -117,7 +118,7 @@ func (c *Client) Stream(ctx context.Context, session Session, request codexwire.
 
 	response, sentRequest, err := attempt(ctx, credentials)
 	if err != nil {
-		c.reportDumpError(c.writeDump(sentRequest, body, nil, []byte(err.Error()), false))
+		c.dumpTransportError(sentRequest, body, err)
 		return nil, err
 	}
 	if response == nil {
@@ -134,7 +135,7 @@ func (c *Client) Stream(ctx context.Context, session Session, request codexwire.
 		}
 		response, sentRequest, err = attempt(ctx, credentials)
 		if err != nil {
-			c.reportDumpError(c.writeDump(sentRequest, body, nil, []byte(err.Error()), false))
+			c.dumpTransportError(sentRequest, body, err)
 			return nil, err
 		}
 		if response == nil {
@@ -146,6 +147,23 @@ func (c *Client) Stream(ctx context.Context, session Session, request codexwire.
 		if err := c.captureNonSuccess(sentRequest, body, response); err != nil {
 			c.reportDumpError(err)
 		}
+		return response, nil
+	}
+	if !isEventStreamResponse(response) {
+		contentType := ""
+		if response.Header != nil {
+			contentType = response.Header.Get("Content-Type")
+		}
+		response.StatusCode = http.StatusUnsupportedMediaType
+		if err := c.captureNonSuccess(sentRequest, body, response); err != nil {
+			c.reportDumpError(err)
+		}
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		explanation := fmt.Sprintf(`{"error":{"type":"api_error","message":"unexpected Codex content type %q, want text/event-stream"}}`, contentType)
+		response.Body = io.NopCloser(strings.NewReader(explanation))
+		response.ContentLength = int64(len(explanation))
 		return response, nil
 	}
 	if c.DebugWire && response.Body != nil {
@@ -282,6 +300,13 @@ func (c *Client) captureNonSuccess(request *http.Request, requestBody []byte, re
 	return c.writeDump(request, requestBody, response, captured, truncated)
 }
 
+func (c *Client) dumpTransportError(request *http.Request, requestBody []byte, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	c.reportDumpError(c.writeDump(request, requestBody, nil, []byte(err.Error()), false))
+}
+
 func (c *Client) reportDumpError(err error) {
 	if err != nil && c.OnDumpError != nil {
 		c.OnDumpError(err)
@@ -373,6 +398,14 @@ func redactBody(body []byte, contentType string) string {
 		}
 	}
 	return redact.Text(string(body))
+}
+
+func isEventStreamResponse(response *http.Response) bool {
+	if response == nil || response.Header == nil {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
 }
 
 func isLoopbackHost(host string) bool {

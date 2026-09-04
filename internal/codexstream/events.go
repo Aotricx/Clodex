@@ -103,7 +103,8 @@ func (e Event) DecodeOutputItem() (OutputItemEvent, error) {
 
 func (e Event) DecodeText() (TextEvent, error) {
 	var out TextEvent
-	if err := e.decodeFamily(&out, "response.output_text.delta", "response.output_text.done"); err != nil {
+	if err := e.decodeFamily(&out, "response.output_text.delta", "response.output_text.done",
+		"response.refusal.delta", "response.refusal.done"); err != nil {
 		return TextEvent{}, err
 	}
 	return out, nil

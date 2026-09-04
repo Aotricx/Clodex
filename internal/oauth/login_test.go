@@ -42,6 +42,60 @@ func TestCallbackListenerBindsIPv4LoopbackOnly(t *testing.T) {
 	}
 }
 
+func TestLoginCallbackServesIPv4LocalhostAndIPv6(t *testing.T) {
+	port := freeCallbackPort(t)
+	ipv6OK := ipv6LoopbackPortAvailable(port)
+	var exchanges atomic.Int32
+	issuer := tokenIssuer(t, &exchanges)
+	defer issuer.Close()
+	probes := 2
+	if ipv6OK {
+		probes = 3
+	}
+	responses := make(chan browserResponse, probes)
+	c := Client{Issuer: issuer.URL, HTTPClient: issuer.Client(), Random: bytes.NewReader(make([]byte, 96)), CallbackPorts: []uint16{port}}
+	tokens, err := c.Login(context.Background(), func(authorizeURL string) error {
+		redirect, state, parseErr := authorizeCallback(authorizeURL)
+		if parseErr != nil {
+			return parseErr
+		}
+		if redirect.Hostname() != "localhost" {
+			return fmt.Errorf("redirect host = %q, want localhost", redirect.Hostname())
+		}
+		go func() {
+			mismatch := url.Values{"state": {"mismatch"}}.Encode()
+			fetchCallback(responses, fmt.Sprintf("http://127.0.0.1:%s/auth/callback?%s", redirect.Port(), mismatch), http.MethodGet)
+			if ipv6OK {
+				fetchCallback(responses, fmt.Sprintf("http://[::1]:%s/auth/callback?%s", redirect.Port(), mismatch), http.MethodGet)
+			}
+			localhostURL := *redirect
+			localhostURL.RawQuery = url.Values{"state": {state}, "code": {"authorization-secret"}}.Encode()
+			fetchCallback(responses, localhostURL.String(), http.MethodGet)
+		}()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens.AccessToken != "access-secret" || exchanges.Load() != 1 {
+		t.Fatalf("tokens/exchanges = %+v / %d", tokens, exchanges.Load())
+	}
+	ipv4Page := <-responses
+	if ipv4Page.err != nil || ipv4Page.status != http.StatusBadRequest {
+		t.Fatalf("IPv4 127.0.0.1 callback = %+v", ipv4Page)
+	}
+	if ipv6OK {
+		ipv6Page := <-responses
+		if ipv6Page.err != nil || ipv6Page.status != http.StatusBadRequest {
+			t.Fatalf("IPv6 [::1] callback = %+v", ipv6Page)
+		}
+	}
+	localhostPage := <-responses
+	if localhostPage.err != nil || localhostPage.status != http.StatusOK {
+		t.Fatalf("localhost callback = %+v", localhostPage)
+	}
+}
+
 func TestLoginSuccessUsesLiveLoopbackPKCECallback(t *testing.T) {
 	port := freeCallbackPort(t)
 	entropy := make([]byte, 96)
@@ -409,6 +463,43 @@ func TestOpenBrowserCommandMatrixAndValidation(t *testing.T) {
 	}
 }
 
+func TestLoginSucceedsWhileOpenerBlocks(t *testing.T) {
+	port := freeCallbackPort(t)
+	var exchanges atomic.Int32
+	issuer := tokenIssuer(t, &exchanges)
+	defer issuer.Close()
+	response := make(chan browserResponse, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c := Client{Issuer: issuer.URL, HTTPClient: issuer.Client(), Random: bytes.NewReader(make([]byte, 96)), CallbackPorts: []uint16{port}}
+	openerDone := make(chan struct{})
+	tokens, err := c.Login(ctx, func(authorizeURL string) error {
+		defer close(openerDone)
+		redirect, state, parseErr := authorizeCallback(authorizeURL)
+		if parseErr != nil {
+			return parseErr
+		}
+		go fetchCallback(response, callbackRequestURL(redirect, state, "authorization-secret"), http.MethodGet)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens.AccessToken != "access-secret" {
+		t.Fatalf("tokens = %+v", tokens)
+	}
+	if exchanges.Load() != 1 {
+		t.Fatalf("exchanges = %d", exchanges.Load())
+	}
+	page := <-response
+	if page.err != nil || page.status != http.StatusOK {
+		t.Fatalf("browser response = %+v", page)
+	}
+	cancel()
+	<-openerDone
+}
+
 func TestLoginDoesNotLeakGoroutinesOnCancellation(t *testing.T) {
 	before := runtime.NumGoroutine()
 	port := freeCallbackPort(t)
@@ -505,4 +596,13 @@ func assertCallbackPortReusable(t *testing.T, port uint16) {
 		t.Fatalf("callback port %d not released: %v", port, err)
 	}
 	listener.Close()
+}
+
+func ipv6LoopbackPortAvailable(port uint16) bool {
+	listener, err := net.Listen("tcp6", fmt.Sprintf("[::1]:%d", port))
+	if err != nil {
+		return false
+	}
+	listener.Close()
+	return true
 }

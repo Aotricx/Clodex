@@ -16,18 +16,20 @@ import (
 )
 
 const (
-	WarningMaxTokensUnsupported     = "request.max_tokens_unsupported"
-	WarningTemperatureUnsupported   = "request.temperature_unsupported"
-	WarningTopPUnsupported          = "request.top_p_unsupported"
-	WarningMetadataUnsupported      = "request.metadata_unsupported"
-	WarningUnknownRequestField      = "request.unknown_field"
-	WarningUnknownContentBlock      = "content.unknown_block"
-	WarningUnknownContentField      = "content.unknown_field"
-	WarningUnknownImageSourceField  = "content.image.unknown_source_field"
-	WarningUnknownTool              = "tool.unknown"
-	WarningUnknownToolField         = "tool.unknown_field"
-	WarningWebSearchUnmappableField = "tool.web_search.unmappable_field"
-	WarningForeignThinkingSignature = "thinking.foreign_signature"
+	WarningMaxTokensUnsupported       = "request.max_tokens_unsupported"
+	WarningTemperatureUnsupported     = "request.temperature_unsupported"
+	WarningTopPUnsupported            = "request.top_p_unsupported"
+	WarningMetadataUnsupported        = "request.metadata_unsupported"
+	WarningUnknownRequestField        = "request.unknown_field"
+	WarningUnknownContentBlock        = "content.unknown_block"
+	WarningUnknownContentField        = "content.unknown_field"
+	WarningUnknownImageSourceField    = "content.image.unknown_source_field"
+	WarningUnknownTool                = "tool.unknown"
+	WarningUnknownToolField           = "tool.unknown_field"
+	WarningWebSearchUnmappableField   = "tool.web_search.unmappable_field"
+	WarningForeignThinkingSignature   = "thinking.foreign_signature"
+	WarningThinkingTypeUnsupported    = "thinking.type_unsupported"
+	WarningThinkingDisplayUnsupported = "thinking.display_unsupported"
 )
 
 // Options carries per-session transport state that is not part of an
@@ -101,10 +103,11 @@ func TranslateRequest(req *anthropic.MessageRequest, selection model.Selection, 
 		t.mapped()
 	}
 	if req.Thinking != nil {
-		t.mapped()
+		t.accountThinking(req.Thinking)
 	}
 	if req.ToolChoice != nil {
 		t.mapped()
+		t.warnUnknownFields(req.ToolChoice.Raw, WarningUnknownRequestField, "type", "name", "disable_parallel_tool_use")
 	}
 	if len(req.Extra) > 0 {
 		for range req.Extra {
@@ -165,6 +168,21 @@ func TranslateRequest(req *anthropic.MessageRequest, selection model.Selection, 
 func (t *translator) mapped() {
 	t.account.Source++
 	t.account.Mapped++
+}
+
+func (t *translator) accountThinking(thinking *anthropic.ThinkingConfig) {
+	typeUnsupported := thinking.Type == "disabled" || thinking.Type == "adaptive"
+	displayUnsupported := thinking.Display == "omitted"
+	if typeUnsupported {
+		t.warn(WarningThinkingTypeUnsupported)
+	}
+	if displayUnsupported {
+		t.warn(WarningThinkingDisplayUnsupported)
+	}
+	if !typeUnsupported && !displayUnsupported {
+		t.mapped()
+	}
+	t.warnUnknownFields(thinking.Raw, WarningUnknownRequestField, "type", "budget_tokens", "display")
 }
 
 func (t *translator) warn(kind string) {
@@ -229,15 +247,29 @@ func (t *translator) webSearchTool(tool anthropic.Tool) codexwire.Tool {
 	}
 	if raw, ok := object["external_web_access"]; ok {
 		var value bool
-		if json.Unmarshal(raw, &value) == nil {
+		if json.Unmarshal(raw, &value) != nil {
+			t.warn(WarningWebSearchUnmappableField)
+			result.ExternalWebAccess = nil
+		} else {
 			result.ExternalWebAccess = &value
 		}
 	}
 	if raw, ok := object["allowed_domains"]; ok {
-		_ = json.Unmarshal(raw, &result.AllowedDomains)
+		var domains []string
+		if json.Unmarshal(raw, &domains) != nil {
+			t.warn(WarningWebSearchUnmappableField)
+		} else {
+			result.AllowedDomains = domains
+		}
 	}
 	if raw, ok := object["search_content_types"]; ok {
-		_ = json.Unmarshal(raw, &result.SearchContentTypes)
+		var types []string
+		if json.Unmarshal(raw, &types) != nil {
+			t.warn(WarningWebSearchUnmappableField)
+			result.SearchContentTypes = nil
+		} else {
+			result.SearchContentTypes = types
+		}
 	}
 	known := stringSet("type", "name", "external_web_access", "allowed_domains", "search_content_types", "cache_control")
 	keys := sortedKeys(object)
@@ -251,6 +283,48 @@ func (t *translator) webSearchTool(tool anthropic.Tool) codexwire.Tool {
 
 func isWebSearchType(value string) bool {
 	return strings.HasPrefix(value, "web_search_") || value == "web_search"
+}
+
+func (t *translator) webSearchCall(block anthropic.ContentBlock) (codexwire.WebSearchCall, bool) {
+	if block.Type != "server_tool_use" {
+		return codexwire.WebSearchCall{}, false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(block.Raw, &object) != nil {
+		return codexwire.WebSearchCall{}, false
+	}
+	var name, id string
+	if !jsonString(object["name"], &name) || name != "web_search" {
+		return codexwire.WebSearchCall{}, false
+	}
+	if !jsonString(object["id"], &id) || id == "" {
+		return codexwire.WebSearchCall{}, false
+	}
+	var input map[string]json.RawMessage
+	if json.Unmarshal(object["input"], &input) != nil {
+		return codexwire.WebSearchCall{}, false
+	}
+	queryRaw, ok := input["query"]
+	if !ok {
+		return codexwire.WebSearchCall{}, false
+	}
+	var query string
+	if !jsonString(queryRaw, &query) {
+		return codexwire.WebSearchCall{}, false
+	}
+	return codexwire.WebSearchCall{
+		ID:     id,
+		Status: "completed",
+		Action: codexwire.WebSearchAction{Type: "search", Query: query},
+	}, true
+}
+
+func jsonString(raw json.RawMessage, dest *string) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return false
+	}
+	return json.Unmarshal(raw, dest) == nil
 }
 
 func (t *translator) toolChoice(choice *anthropic.ToolChoice, tools []anthropic.Tool) codexwire.ToolChoice {
@@ -292,6 +366,7 @@ func namedWebSearch(tools []anthropic.Tool, name string) bool {
 func (t *translator) input(messages []anthropic.Message) []codexwire.InputItem {
 	out := make([]codexwire.InputItem, 0, len(messages))
 	for _, message := range messages {
+		t.warnUnknownFields(message.Raw, WarningUnknownRequestField, "role", "content")
 		switch message.Role {
 		case "user":
 			t.userMessage(&out, message.Content)
@@ -400,8 +475,21 @@ func (t *translator) assistantMessage(out *[]codexwire.InputItem, blocks []anthr
 			t.mapped()
 			t.warnUnknownBlockFields(block.Raw, "type", "data")
 			flush()
-			*out = append(*out, codexwire.ReasoningItem{EncryptedContent: stringPtr(block.RedactedThinking.Data)})
+			reasoning := codexwire.ReasoningItem{}
+			if replay, ok := DecodeReasoningSignature(block.RedactedThinking.Data); ok {
+				reasoning.EncryptedContent = stringPtr(replay.EncryptedContent)
+			} else {
+				t.warn(WarningForeignThinkingSignature)
+			}
+			*out = append(*out, reasoning)
 		default:
+			if call, ok := t.webSearchCall(block); ok {
+				t.mapped()
+				t.warnUnknownBlockFields(block.Raw, "type", "id", "name", "input")
+				flush()
+				*out = append(*out, call)
+				continue
+			}
 			t.warn(WarningUnknownContentBlock)
 		}
 	}
@@ -496,9 +584,13 @@ func (t *translator) warnUnknownFields(raw json.RawMessage, kind string, known .
 		return
 	}
 	knownSet := stringSet(known...)
-	for key := range object {
+	for key, value := range object {
 		if _, ok := knownSet[key]; !ok {
 			t.warn(kind)
+			continue
+		}
+		if key == "cache_control" {
+			t.warnUnknownFields(value, kind, "type", "ttl")
 		}
 	}
 }
@@ -524,6 +616,7 @@ func (t *translator) warnImageUnknownFields(block anthropic.ContentBlock) {
 func (t *translator) accountCacheControls(req *anthropic.MessageRequest) {
 	if req.CacheControl != nil {
 		t.mapped()
+		t.warnUnknownFields(req.CacheControl.Raw, WarningUnknownRequestField, "type", "ttl")
 	}
 	for _, block := range req.System {
 		if blockCacheControl(block) != nil {

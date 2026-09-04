@@ -26,7 +26,7 @@ var (
 	textBarePattern         = regexp.MustCompile(textSecretPrefix + `[^\s,;&"']+`)
 )
 
-const textSecretPrefix = `(?i)(^|[^A-Za-z0-9_-])((?:"|')?(?:token|auth[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|cookie|set[-_]?cookie|(?:(?:chatgpt|openai)[-_]?)?account[-_]?id|email|client[-_]?secret)(?:"|')?[ \t]*[:=][ \t]*)`
+const textSecretPrefix = `(?i)(^|[^A-Za-z0-9_-])((?:"|')?(?:token|auth[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|cookie|set[-_]?cookie|(?:(?:chatgpt|openai)[-_]?)?account[-_]?id|email|client[-_]?secret|password|code[-_]?verifier)(?:"|')?[ \t]*[:=][ \t]*)`
 
 var sensitiveFieldNames = map[string]struct{}{
 	"accesstoken":        {},
@@ -49,23 +49,13 @@ var sensitiveFieldNames = map[string]struct{}{
 	"chatgptaccountid":   {},
 	"openaiaccountid":    {},
 	"email":              {},
+	"password":           {},
+	"encryptedcontent":   {},
 }
 
-var sensitiveQueryNames = map[string]struct{}{
+var extraSensitiveQueryNames = map[string]struct{}{
 	"code":                {},
 	"state":               {},
-	"token":               {},
-	"accesstoken":         {},
-	"refreshtoken":        {},
-	"idtoken":             {},
-	"authtoken":           {},
-	"sessiontoken":        {},
-	"authorization":       {},
-	"apikey":              {},
-	"clientsecret":        {},
-	"accountid":           {},
-	"chatgptaccountid":    {},
-	"openaiaccountid":     {},
 	"oauthverifier":       {},
 	"oauthconsumersecret": {},
 }
@@ -323,7 +313,10 @@ func SensitiveName(name string) bool {
 
 func sensitiveQueryName(name string) bool {
 	normalized := normalizeName(name)
-	if _, sensitive := sensitiveQueryNames[normalized]; sensitive {
+	if _, sensitive := sensitiveFieldNames[normalized]; sensitive {
+		return true
+	}
+	if _, sensitive := extraSensitiveQueryNames[normalized]; sensitive {
 		return true
 	}
 	return sensitiveNameSuffix(normalized)

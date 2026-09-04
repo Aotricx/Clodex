@@ -162,7 +162,12 @@ func (handler *Handler) countTokens(writer http.ResponseWriter, request *http.Re
 		handler.writeError(writer, http.StatusServiceUnavailable, "api_error", redact.Text(err.Error()))
 		return
 	}
-	prepared, err := requestprep.Prepare(resolution.Catalog, decoded, handler.defaultModel, request.Header.Get("x-claude-code-session-id"))
+	session, err := sessionFromHeader(request.Header.Get("x-claude-code-session-id"))
+	if err != nil {
+		handler.writeError(writer, http.StatusInternalServerError, "api_error", redact.Text(err.Error()))
+		return
+	}
+	prepared, err := requestprep.Prepare(resolution.Catalog, decoded, handler.defaultModel, session.ThreadID)
 	if err != nil {
 		handler.writeError(writer, http.StatusBadRequest, "invalid_request_error", redact.Text(err.Error()))
 		return

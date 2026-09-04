@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -61,6 +62,10 @@ func run(ctx context.Context, args []string, dependencies cliDependencies) error
 	case "serve":
 		cfg, err := config.LoadServe(args[1:], dependencies.lookupEnv)
 		if err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				_, writeErr := fmt.Fprintln(dependencies.stdout, err.Error())
+				return writeErr
+			}
 			return err
 		}
 		return dependencies.serve(ctx, cfg)
@@ -167,12 +172,26 @@ func newAuthService(writer io.Writer) (*commandauth.Service, error) {
 	return &commandauth.Service{OAuth: &oauth.Client{}, Store: &auth.Store{Path: path}, Writer: writer}, nil
 }
 
+func requireCodexAuth(store *auth.Store) error {
+	_, err := store.Read()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clodex claude requires credentials in ~/.codex/auth.json; run clodex auth login or clodex auth device first: %w", err)
+	}
+	return err
+}
+
 func runClaude(ctx context.Context, args []string, cfg config.Config) error {
 	paths, err := app.DefaultPaths(nil)
 	if err != nil {
 		return err
 	}
 	store := &auth.Store{Path: paths.Auth}
+	if err := requireCodexAuth(store); err != nil {
+		return err
+	}
 	coordinator := &auth.Coordinator{Store: store, OAuth: &oauth.Client{}}
 	manager := &catalog.Manager{CachePath: paths.Catalog, Discovery: &catalog.DiscoveryClient{Auth: coordinator}}
 	return launcher.Run(ctx, args, launcher.Options{

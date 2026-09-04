@@ -60,6 +60,46 @@ func TestListModelsPaginatesClaudeGatewayQueryWithoutInventedModels(t *testing.T
 	}
 }
 
+func TestListModelsBeforeIDReturnsThePageImmediatelyBeforeCursor(t *testing.T) {
+	cat := catalog.Catalog{Models: []catalog.Model{{
+		Slug:                     "gpt-test",
+		DisplayName:              "GPT Test",
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: []catalog.ReasoningLevel{{Effort: "low"}, {Effort: "medium"}},
+		AdditionalSpeedTiers:     []string{"fast"},
+		ServiceTiers:             []catalog.ServiceTier{{ID: "priority", Name: "Fast"}},
+	}}}
+	all, err := ListModels(cat, url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Data) < 5 {
+		t.Fatalf("expandModels produced %d models, need at least 5", len(all.Data))
+	}
+
+	cursor := all.Data[len(all.Data)-1].ID
+	page, err := ListModels(cat, url.Values{"limit": {"2"}, "before_id": {cursor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want0 := all.Data[len(all.Data)-3].ID
+	want1 := all.Data[len(all.Data)-2].ID
+	if len(page.Data) != 2 || page.Data[0].ID != want0 || page.Data[1].ID != want1 || !page.HasMore {
+		t.Fatalf("before_id page = %#v, want IDs %q, %q with has_more toward the start", page, want0, want1)
+	}
+	if page.FirstID != want0 || page.LastID != want1 {
+		t.Fatalf("before_id cursors first=%q last=%q, want %q %q", page.FirstID, page.LastID, want0, want1)
+	}
+
+	fits, err := ListModels(cat, url.Values{"limit": {"2"}, "before_id": {all.Data[2].ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fits.Data) != 2 || fits.Data[0].ID != all.Data[0].ID || fits.Data[1].ID != all.Data[1].ID || fits.HasMore {
+		t.Fatalf("before_id prefix page = %#v, want the two items at the start with has_more=false", fits)
+	}
+}
+
 func TestListModelsRejectsInvalidPagination(t *testing.T) {
 	cat, err := catalog.LoadFallback()
 	if err != nil {

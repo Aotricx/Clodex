@@ -153,6 +153,21 @@ func TestRequestMarshalJSONToolChoicesAndFixedStreamingTransport(t *testing.T) {
 	}
 }
 
+func TestRequestMarshalJSONWebSearchCall(t *testing.T) {
+	got, err := json.Marshal(WebSearchCall{
+		ID:     "ws_1",
+		Status: "completed",
+		Action: WebSearchAction{Type: "search", Query: "golang"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"golang"}}`
+	if string(got) != want {
+		t.Fatalf("web_search_call JSON = %s, want %s", got, want)
+	}
+}
+
 func TestWebSearchToolMarshalJSON(t *testing.T) {
 	tool := WebSearchTool{
 		ExternalWebAccess:  boolPtr(true),

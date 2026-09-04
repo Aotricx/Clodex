@@ -68,7 +68,11 @@ func ListModels(cat catalog.Catalog, query url.Values) (ModelList, error) {
 	candidates := models[start:end]
 	hasMore := len(candidates) > limit
 	if hasMore {
-		candidates = candidates[:limit]
+		if beforeID != "" && afterID == "" {
+			candidates = candidates[len(candidates)-limit:]
+		} else {
+			candidates = candidates[:limit]
+		}
 	}
 	data := append([]Model(nil), candidates...)
 	result := ModelList{Data: data, HasMore: hasMore}

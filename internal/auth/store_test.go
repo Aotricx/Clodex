@@ -434,6 +434,97 @@ func TestStoreUpdateRetriesWhenDiskChangesBeforeRename(t *testing.T) {
 	}
 }
 
+func TestStoreAtomicWritesUpdateSymlinkTargetAndLeaveLink(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	targetDir := t.TempDir()
+	linkDir := t.TempDir()
+	target := filepath.Join(targetDir, "real-auth.json")
+	link := filepath.Join(linkDir, "auth.json")
+	initial := validAuthFile(t, now.Add(time.Hour), now)
+	writeFileValue(t, target, initial)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not permitted: %v", err)
+	}
+
+	assertStillSymlink := func(t *testing.T) {
+		t.Helper()
+		info, err := os.Lstat(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("Store.Path is no longer a symlink")
+		}
+		got, err := os.Readlink(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != target {
+			t.Fatalf("symlink destination = %q, want %q", got, target)
+		}
+	}
+
+	t.Run("UpdateAtomically", func(t *testing.T) {
+		store := &Store{Path: link}
+		newAccess := syntheticJWT(t, map[string]any{"exp": now.Add(2 * time.Hour).Unix(), "generation": "symlink"})
+		updated, err := store.UpdateAtomically(func(current *File) error {
+			current.Tokens.AccessToken = newAccess
+			current.LastRefresh = now.Add(time.Minute)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateAtomically() error = %v", err)
+		}
+		if updated.Tokens.AccessToken != newAccess {
+			t.Fatal("returned update missing access token")
+		}
+		assertStillSymlink(t)
+		disk, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(disk, []byte(newAccess)) {
+			t.Fatal("target file was not updated")
+		}
+		viaLink, err := store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if viaLink.Tokens.AccessToken != newAccess {
+			t.Fatal("read through symlink missing updated access token")
+		}
+	})
+
+	t.Run("SaveLogin", func(t *testing.T) {
+		tokens := completeLoginTokens(t)
+		store := &Store{Path: link}
+		saved, err := store.SaveLogin(tokens, now.Add(2*time.Minute))
+		if err != nil {
+			t.Fatalf("SaveLogin() error = %v", err)
+		}
+		if saved.Tokens.AccessToken != tokens.AccessToken {
+			t.Fatal("SaveLogin returned wrong access token")
+		}
+		assertStillSymlink(t)
+		disk, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(disk, []byte(tokens.AccessToken)) {
+			t.Fatal("SaveLogin did not update symlink target")
+		}
+		linkInfo, err := os.Lstat(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if linkInfo.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("SaveLogin replaced the symlink inode")
+		}
+	})
+}
+
 func TestStoreReadWaitsForAtomicRenameCriticalSection(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	path := filepath.Join(t.TempDir(), "auth.json")

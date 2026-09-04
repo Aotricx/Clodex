@@ -98,10 +98,12 @@ func TestTranslateCountTokensRequestDoesNotInventMaxTokenWarning(t *testing.T) {
 
 func TestTranslateRequestSignatureOnlyAndRedactedThinking(t *testing.T) {
 	signature, _ := EncodeReasoningSignature(ReasoningReplay{ID: "rs_only", EncryptedContent: "opaque-one"})
+	redacted, _ := EncodeReasoningSignature(ReasoningReplay{ID: "rs_redacted", EncryptedContent: "opaque-redacted"})
 	req := decodeRequest(t, `{
 		"model":"m","max_tokens":1,"messages":[{"role":"assistant","content":[
 			{"type":"thinking","thinking":"","signature":"`+signature+`"},
 			{"type":"redacted_thinking","data":"opaque-two"},
+			{"type":"redacted_thinking","data":"`+redacted+`"},
 			{"type":"thinking","thinking":"visible","signature":"foreign-signature"}
 		]}]
 	}`)
@@ -110,14 +112,83 @@ func TestTranslateRequestSignatureOnlyAndRedactedThinking(t *testing.T) {
 	if !strings.Contains(string(got), `{"type":"reasoning","summary":[],"encrypted_content":"opaque-one"}`) {
 		t.Fatalf("signature-only reasoning absent: %s", got)
 	}
-	if !strings.Contains(string(got), `{"type":"reasoning","summary":[],"encrypted_content":"opaque-two"}`) {
-		t.Fatalf("redacted reasoning absent: %s", got)
+	if !strings.Contains(string(got), `{"type":"reasoning","summary":[],"encrypted_content":null}`) {
+		t.Fatalf("foreign redacted thinking should omit/null encrypted_content: %s", got)
+	}
+	if strings.Contains(string(got), `"encrypted_content":"opaque-two"`) {
+		t.Fatalf("opaque-two must not be forwarded as encrypted_content: %s", got)
+	}
+	if !strings.Contains(string(got), `{"type":"reasoning","summary":[],"encrypted_content":"opaque-redacted"}`) {
+		t.Fatalf("valid redacted envelope did not round-trip: %s", got)
 	}
 	if !strings.Contains(string(got), `{"type":"reasoning","summary":[{"type":"summary_text","text":"visible"}],"encrypted_content":null}`) {
 		t.Fatalf("foreign-signature visible reasoning absent: %s", got)
 	}
-	if warningCount(result.Warnings, WarningForeignThinkingSignature) != 1 {
-		t.Fatalf("warnings = %#v", result.Warnings)
+	if warningCount(result.Warnings, WarningForeignThinkingSignature) != 2 {
+		t.Fatalf("warnings = %#v, want 2 foreign thinking signatures (opaque-two + foreign-signature)", result.Warnings)
+	}
+}
+
+func TestTranslateRequestThinkingTypeHonesty(t *testing.T) {
+	disabled := decodeRequest(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],
+		"thinking":{"type":"disabled"}
+	}`)
+	disabledResult := translateOK(t, disabled, normalSelection(), Options{})
+	if disabledResult.Request.Reasoning == nil || disabledResult.Request.Reasoning.Effort != "low" {
+		t.Fatalf("disabled thinking reasoning = %#v, want selection effort", disabledResult.Request.Reasoning)
+	}
+	if warningCount(disabledResult.Warnings, WarningThinkingTypeUnsupported) != 1 {
+		t.Fatalf("disabled thinking warnings = %#v, want thinking.type_unsupported", disabledResult.Warnings)
+	}
+	if disabledResult.Accounting.Source != disabledResult.Accounting.Mapped+disabledResult.Accounting.Warned {
+		t.Fatalf("disabled thinking accounting = %#v", disabledResult.Accounting)
+	}
+
+	adaptive := decodeRequest(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],
+		"thinking":{"type":"adaptive","display":"summarized"}
+	}`)
+	adaptiveResult := translateOK(t, adaptive, normalSelection(), Options{})
+	if warningCount(adaptiveResult.Warnings, WarningThinkingTypeUnsupported) != 1 {
+		t.Fatalf("adaptive thinking warnings = %#v", adaptiveResult.Warnings)
+	}
+
+	omitted := decodeRequest(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],
+		"thinking":{"type":"enabled","budget_tokens":1024,"display":"omitted"}
+	}`)
+	omittedResult := translateOK(t, omitted, normalSelection(), Options{})
+	if warningCount(omittedResult.Warnings, WarningThinkingDisplayUnsupported) != 1 {
+		t.Fatalf("omitted display warnings = %#v, want thinking.display_unsupported", omittedResult.Warnings)
+	}
+	if warningCount(omittedResult.Warnings, WarningThinkingTypeUnsupported) != 0 {
+		t.Fatalf("enabled+omitted should not warn type: %#v", omittedResult.Warnings)
+	}
+
+	enabled := decodeRequest(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}],
+		"thinking":{"type":"enabled","budget_tokens":2048}
+	}`)
+	enabledResult := translateOK(t, enabled, normalSelection(), Options{})
+	if enabledResult.Request.Reasoning == nil || enabledResult.Request.Reasoning.Effort != "low" {
+		t.Fatalf("enabled thinking reasoning = %#v", enabledResult.Request.Reasoning)
+	}
+	if warningCount(enabledResult.Warnings, WarningThinkingTypeUnsupported) != 0 || warningCount(enabledResult.Warnings, WarningThinkingDisplayUnsupported) != 0 {
+		t.Fatalf("enabled thinking warnings = %#v, want no thinking unsupported warnings", enabledResult.Warnings)
+	}
+}
+
+func TestTranslateRequestWarnsNestedRawExtras(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"thinking":{"type":"enabled","budget_tokens":1024,"future_think":1},
+		"tool_choice":{"type":"auto","future_choice":true},
+		"messages":[{"role":"user","future":1,"content":"x"}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	if warningCount(result.Warnings, WarningUnknownRequestField) < 3 {
+		t.Fatalf("nested Raw extras warnings = %#v, want request.unknown_field for message, thinking, and tool_choice", result.Warnings)
 	}
 }
 
@@ -263,7 +334,7 @@ func TestTranslateRequestUnknownSemanticItemsAreWarningAccounted(t *testing.T) {
 	result := translateOK(t, req, normalSelection(), Options{})
 	for kind, want := range map[string]int{
 		WarningUnknownRequestField: 1,
-		WarningUnknownContentBlock: 4,
+		WarningUnknownContentBlock: 3,
 		WarningUnknownContentField: 1,
 		WarningUnknownTool:         1,
 	} {
@@ -271,8 +342,66 @@ func TestTranslateRequestUnknownSemanticItemsAreWarningAccounted(t *testing.T) {
 			t.Errorf("warning %s = %d, want %d (%#v)", kind, got, want, result.Warnings)
 		}
 	}
+	wire, _ := json.Marshal(result.Request)
+	if !strings.Contains(string(wire), `"type":"web_search_call"`) || !strings.Contains(string(wire), `"query":"x"`) {
+		t.Fatalf("web_search_call input missing: %s", wire)
+	}
 	if result.Accounting.Source == 0 || result.Accounting.Source != result.Accounting.Mapped+result.Accounting.Warned {
 		t.Fatalf("semantic accounting = %#v", result.Accounting)
+	}
+}
+
+func TestTranslateRequestMalformedWebSearchServerToolUseStaysUnknown(t *testing.T) {
+	for _, block := range []string{
+		`{"type":"server_tool_use","id":"s","name":"web_search","input":["not","object"]}`,
+		`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`,
+		`{"type":"server_tool_use","id":"s","name":"code_execution","input":{"query":"x"}}`,
+	} {
+		req := decodeRequest(t, `{"model":"m","max_tokens":1,"messages":[{"role":"assistant","content":[`+block+`]}]}`)
+		result := translateOK(t, req, normalSelection(), Options{})
+		wire, _ := json.Marshal(result.Request)
+		if strings.Contains(string(wire), `"type":"web_search_call"`) {
+			t.Fatalf("invented web_search_call for %s: %s", block, wire)
+		}
+		if warningCount(result.Warnings, WarningUnknownContentBlock) != 1 {
+			t.Fatalf("warnings = %#v, want unknown content block for %s", result.Warnings, block)
+		}
+	}
+}
+
+func TestTranslateRequestWebSearchToolInvalidFieldsAreWarnedNotInvented(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"go"}],
+		"tools":[{"type":"web_search_20250305","name":"web_search","external_web_access":"yes","allowed_domains":"example.com","search_content_types":{"text":true}}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	if warningCount(result.Warnings, WarningWebSearchUnmappableField) < 3 {
+		t.Fatalf("warnings = %#v, want unmarshal failures warned", result.Warnings)
+	}
+	wire, _ := json.Marshal(result.Request)
+	if strings.Contains(string(wire), `"external_web_access":true`) {
+		t.Fatalf("invented external_web_access default after unmarshal failure: %s", wire)
+	}
+	if strings.Contains(string(wire), `"search_content_types":["text","image"]`) {
+		t.Fatalf("invented search_content_types default after unmarshal failure: %s", wire)
+	}
+	if strings.Contains(string(wire), `"allowed_domains"`) {
+		t.Fatalf("invented allowed_domains after unmarshal failure: %s", wire)
+	}
+}
+
+func TestTranslateRequestCacheControlUnknownFieldsAreWarned(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"cache_control":{"type":"ephemeral","foo":1},
+		"messages":[{"role":"user","content":[{"type":"text","text":"go","cache_control":{"type":"ephemeral","foo":1}}]}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	if warningCount(result.Warnings, WarningUnknownContentField) != 1 {
+		t.Fatalf("content cache_control warnings = %#v, want foo warned", result.Warnings)
+	}
+	if warningCount(result.Warnings, WarningUnknownRequestField) != 1 {
+		t.Fatalf("request cache_control warnings = %#v, want foo warned", result.Warnings)
 	}
 }
 

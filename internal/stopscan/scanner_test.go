@@ -14,6 +14,8 @@ func TestScannerMatchesWithinAndAcrossDeltas(t *testing.T) {
 		{name: "across", stops: []string{"<END>"}, chunks: []string{"before <E", "ND> after"}, wantOutput: "before ", wantMatch: "<END>"},
 		{name: "overlapping earliest", stops: []string{"bc", "abc"}, chunks: []string{"zabc"}, wantOutput: "z", wantMatch: "abc"},
 		{name: "request order breaks exact tie", stops: []string{"END", "END"}, chunks: []string{"aEND"}, wantOutput: "a", wantMatch: "END"},
+		{name: "same offset distinct stops request order", stops: []string{"EN", "END"}, chunks: []string{"xEND"}, wantOutput: "x", wantMatch: "EN"},
+		{name: "same offset longer first", stops: []string{"END", "EN"}, chunks: []string{"xEND"}, wantOutput: "x", wantMatch: "END"},
 		{name: "unicode", stops: []string{"🛑終"}, chunks: []string{"alpha 🛑", "終 omega"}, wantOutput: "alpha ", wantMatch: "🛑終"},
 	}
 	for _, test := range tests {

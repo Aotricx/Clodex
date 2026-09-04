@@ -22,6 +22,7 @@ func TestThirdPartyNoticesCanonicalAndComplete(t *testing.T) {
 	}
 
 	required := []string{
+		"used by the Go package for `clodex licenses` output.",
 		"raine/claude-code-proxy",
 		"0b79fbc231a8c5a45f035c56e9f7ed89ab5d64c4",
 		"Copyright © 2026 Raine Virta",

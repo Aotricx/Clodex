@@ -319,6 +319,57 @@ func TestDecodeRequestValidatesRequiredFieldsAndUnionTypes(t *testing.T) {
 	}
 }
 
+func TestDecodeRequestRejectsNullAndNonStringStopSequenceElements(t *testing.T) {
+	valid := `"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}]`
+	for _, tc := range []struct {
+		name, stops string
+	}{
+		{"null element", `[null]`},
+		{"string then null", `["END", null]`},
+		{"number element", `[1]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decodeInvalid(t, `{`+valid+`,"stop_sequences":`+tc.stops+`}`)
+		})
+	}
+}
+
+func TestDecodeRequestRejectsEmptyMessageAndSystemContentArrays(t *testing.T) {
+	decodeInvalid(t, `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[]}]}`)
+	decodeInvalid(t, `{"model":"m","max_tokens":1,"system":[],"messages":[{"role":"user","content":"x"}]}`)
+
+	req := decodeOK(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":[
+			{"type":"tool_result","tool_use_id":"b"}
+		]}]
+	}`)
+	if got := req.Messages[0].Content[0].ToolResult; got == nil || got.Content != nil {
+		t.Fatalf("omitted tool result content = %#v, want nil", got)
+	}
+}
+
+func TestDecodeRequestPreservesRawExtrasOnMessageToolChoiceThinkingAndCacheControl(t *testing.T) {
+	req := decodeOK(t, `{
+		"model":"m","max_tokens":1,
+		"messages":[{"role":"user","future":1,"content":"x"}],
+		"tool_choice":{"type":"auto","future_choice":true},
+		"thinking":{"type":"disabled","future_thinking":true},
+		"cache_control":{"type":"ephemeral","foo":1}
+	}`)
+	if req.Messages[0].Raw == nil || !strings.Contains(string(req.Messages[0].Raw), `"future":1`) {
+		t.Fatalf("message raw = %s, want future extra preserved", req.Messages[0].Raw)
+	}
+	if req.ToolChoice == nil || req.ToolChoice.Raw == nil || !strings.Contains(string(req.ToolChoice.Raw), `"future_choice":true`) {
+		t.Fatalf("tool_choice raw = %#v", req.ToolChoice)
+	}
+	if req.Thinking == nil || req.Thinking.Raw == nil || !strings.Contains(string(req.Thinking.Raw), `"future_thinking":true`) {
+		t.Fatalf("thinking raw = %#v", req.Thinking)
+	}
+	if req.CacheControl == nil || req.CacheControl.Raw == nil || !strings.Contains(string(req.CacheControl.Raw), `"foo":1`) {
+		t.Fatalf("cache_control raw = %#v", req.CacheControl)
+	}
+}
+
 func TestDecodeRequestRejectsNullScalars(t *testing.T) {
 	valid := `"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"}]`
 	tests := []struct {

@@ -130,14 +130,13 @@ func assertEmptyRegression(t *testing.T, fixture string) {
 }
 
 func TestRegressionIncompleteIsMaxTokensNoRetry(t *testing.T) {
-	body := strings.Replace(string(fixtureBytes(t, "regression_incomplete.sse")), `"usage":{}`, `"usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}`, 1)
-	transport := &scriptedTransport{fallback: reply{status: 200, body: []byte(body)}}
+	transport := &scriptedTransport{fallback: reply{status: 200, body: fixtureBytes(t, "regression_incomplete.sse")}}
 	engine := newTestEngine(t, transport)
 	result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if transport.Attempts() != 1 || result.Response.StopReason != reducer.StopMaxTokens || result.Response.Usage != (reducer.Usage{InputTokens: 7, OutputTokens: 3}) {
+	if transport.Attempts() != 1 || result.Response.StopReason != reducer.StopMaxTokens || result.Response.Usage != (reducer.Usage{}) {
 		t.Fatalf("result/attempts = %#v / %d", result, transport.Attempts())
 	}
 }
@@ -317,6 +316,175 @@ func TestRunBufferedTimingHasNoCommitLeg(t *testing.T) {
 	}
 }
 
+func TestOverlongRetryAfterReturnsEngineErrorNotBareError(t *testing.T) {
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: 5 * time.Minute,
+		Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 100, CircuitCooldown: time.Minute,
+	}, fixedClock{}, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &scriptedTransport{fallback: reply{
+		status:  429,
+		headers: http.Header{"Retry-After": {"3600"}},
+		body:    []byte(`{"error":{"message":"rate limited"}}`),
+	}}
+	engine := &Engine{Transport: transport, Retry: controller}
+	_, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	var apiError *Error
+	if !errors.As(runErr, &apiError) {
+		t.Fatalf("Run error = %T %v, want *Error", runErr, runErr)
+	}
+	if apiError.Failure.StatusCode != http.StatusServiceUnavailable && apiError.Failure.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want 503 or 429", apiError.Failure.StatusCode)
+	}
+	if apiError.Failure.Retryable {
+		t.Fatal("Retryable = true, want false")
+	}
+	if apiError.Failure.RetryAfter != "3600" {
+		t.Fatalf("RetryAfter = %q, want 3600 so Claude can see it", apiError.Failure.RetryAfter)
+	}
+}
+
+func TestEmptyCompletionRetryHoldsHalfOpenProbe(t *testing.T) {
+	clock := newTestClock(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: time.Hour,
+		Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+	}, clock, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.Failed(true)
+	if snapshot := controller.Snapshot(); snapshot.State != retry.StateOpen {
+		t.Fatalf("precondition: circuit state = %s, want open", snapshot.State)
+	}
+	clock.advance(time.Minute)
+
+	transport := &scriptedTransport{script: []reply{
+		{status: 200, body: fixtureBytes(t, "regression_terminal_only_completed.sse")},
+		{status: 200, body: successText("recovered")},
+	}}
+	empty := 2
+	engine := &Engine{
+		Transport:       transport,
+		Retry:           controller,
+		MaxEmptyRetries: &empty,
+		Wait:            func(context.Context, int, string) error { return nil },
+	}
+	result, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	if runErr != nil {
+		t.Fatalf("Run error = %v, want empty-completion retry to reuse the half-open probe", runErr)
+	}
+	if got := transport.Attempts(); got != 2 {
+		t.Fatalf("attempts = %d, want 2 (probe + empty retry, not circuit-open abort)", got)
+	}
+	if result.Response.Content[0].Text != "recovered" {
+		t.Fatalf("content = %#v, want recovered", result.Response.Content)
+	}
+}
+
+func TestFailedOpenCircuitSkipsWaitAndReturnsEngineError(t *testing.T) {
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: time.Hour,
+		Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+	}, fixedClock{}, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	transport := &scriptedTransport{fallback: reply{status: 503, body: []byte(`{"error":{"message":"unavailable"}}`)}}
+	transient := 3
+	engine := &Engine{
+		Transport:           transport,
+		Retry:               controller,
+		MaxTransientRetries: &transient,
+		Wait: func(context.Context, int, string) error {
+			waited = true
+			return nil
+		},
+	}
+	_, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	var apiError *Error
+	if !errors.As(runErr, &apiError) {
+		t.Fatalf("Run error = %T %v, want *Error", runErr, runErr)
+	}
+	if apiError.Failure.StatusCode != http.StatusServiceUnavailable || apiError.Failure.Retryable {
+		t.Fatalf("failure = %#v", apiError.Failure)
+	}
+	if !strings.Contains(apiError.Failure.Message, retry.ErrCircuitOpen.Error()) {
+		t.Fatalf("message = %q, want circuit open", apiError.Failure.Message)
+	}
+	if waited {
+		t.Fatal("Wait ran after Failed opened the circuit")
+	}
+	if got := transport.Attempts(); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+}
+
+func TestConsumeIgnoresTrailingEventsAfterTerminal(t *testing.T) {
+	rateLimits := []byte("event: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"rate_limits\":{\"limit_reached\":true},\"credits\":{\"has_credits\":true,\"unlimited\":false}}\n\n")
+	lateDelta := []byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"late\"}\n\n")
+	malformedLimits := []byte("event: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"credits\":{\"has_credits\":true}}\n\n")
+
+	t.Run("trailing rate limits", func(t *testing.T) {
+		var snapshots []status.RateLimitSnapshot
+		transport := &scriptedTransport{fallback: reply{status: 200, body: concatSSE(successText("ok"), rateLimits)}}
+		engine := newTestEngine(t, transport)
+		engine.RateLimit = func(snapshot status.RateLimitSnapshot) { snapshots = append(snapshots, snapshot) }
+		result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+		if err != nil {
+			t.Fatalf("Run error = %v, want success after trailing rate_limits", err)
+		}
+		if result.Response.Content[0].Text != "ok" || transport.Attempts() != 1 {
+			t.Fatalf("result=%#v attempts=%d", result, transport.Attempts())
+		}
+		if len(snapshots) != 1 || !snapshots[0].LimitReached {
+			t.Fatalf("trailing rate_limits snapshots = %#v", snapshots)
+		}
+	})
+
+	t.Run("trailing output delta", func(t *testing.T) {
+		transport := &scriptedTransport{fallback: reply{status: 200, body: concatSSE(successText("ok"), lateDelta)}}
+		engine := newTestEngine(t, transport)
+		result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+		if err != nil {
+			t.Fatalf("Run error = %v, want ignore trailing delta (not 502)", err)
+		}
+		if result.Response.Content[0].Text != "ok" {
+			t.Fatalf("content = %#v", result.Response.Content)
+		}
+	})
+
+	t.Run("malformed trailing rate limits", func(t *testing.T) {
+		transport := &scriptedTransport{fallback: reply{status: 200, body: concatSSE(successText("ok"), malformedLimits)}}
+		engine := newTestEngine(t, transport)
+		result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+		if err != nil {
+			t.Fatalf("Run error = %v, want skip malformed trailing rate_limits", err)
+		}
+		if result.Response.Content[0].Text != "ok" {
+			t.Fatalf("content = %#v", result.Response.Content)
+		}
+	})
+}
+
+func TestEngineRetriesNilTransportResponse(t *testing.T) {
+	transport := &scriptedTransport{script: []reply{
+		{nilResponse: true},
+		{status: 200, body: successText("recovered")},
+	}}
+	engine := newTestEngine(t, transport)
+	result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	if err != nil {
+		t.Fatalf("Run error = %v, want nil-response retry", err)
+	}
+	if transport.Attempts() != 2 || result.Response.Content[0].Text != "recovered" {
+		t.Fatalf("result=%#v attempts=%d", result, transport.Attempts())
+	}
+}
+
 func testRequest(streaming bool) Request {
 	return Request{
 		Session:   upstream.Session{SessionID: "session", ThreadID: "thread"},
@@ -366,16 +534,25 @@ func successText(text string) []byte {
 	return []byte("event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"output_index\":0,\"content_index\":0,\"text\":" + mustJSON(text) + "}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
 }
 
+func concatSSE(parts ...[]byte) []byte {
+	var body []byte
+	for _, part := range parts {
+		body = append(body, part...)
+	}
+	return body
+}
+
 func mustJSON(value string) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
 }
 
 type reply struct {
-	status  int
-	headers http.Header
-	body    []byte
-	err     error
+	status      int
+	headers     http.Header
+	body        []byte
+	err         error
+	nilResponse bool
 }
 
 type scriptedTransport struct {
@@ -402,6 +579,9 @@ func (transport *scriptedTransport) Stream(_ context.Context, _ upstream.Session
 	}
 	if selected.err != nil {
 		return nil, selected.err
+	}
+	if selected.nilResponse {
+		return nil, nil
 	}
 	statusCode := selected.status
 	if statusCode == 0 {
@@ -434,6 +614,37 @@ type fixedClock struct{}
 
 func (fixedClock) Now() time.Time                                   { return time.Unix(0, 0) }
 func (fixedClock) Sleep(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newTestClock(now time.Time) *testClock { return &testClock{now: now} }
+
+func (clock *testClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *testClock) Sleep(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	clock.mu.Lock()
+	clock.now = clock.now.Add(delay)
+	clock.mu.Unlock()
+	return nil
+}
+
+func (clock *testClock) advance(delay time.Duration) {
+	clock.mu.Lock()
+	clock.now = clock.now.Add(delay)
+	clock.mu.Unlock()
+}
 
 type diagnosticRecord struct {
 	session upstream.Session

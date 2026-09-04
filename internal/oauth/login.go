@@ -66,6 +66,7 @@ func (c *Client) Login(ctx context.Context, opener Opener) (TokenSet, error) {
 	if err != nil {
 		return TokenSet{}, err
 	}
+	ipv6Listener, _ := listenIPv6Loopback(ctx, actualPort)
 	loginCtx, cancel := context.WithCancel(ctx)
 	callbacks := make(chan loginCallback, 1)
 	server := &http.Server{
@@ -75,21 +76,35 @@ func (c *Client) Login(ctx context.Context, opener Opener) (TokenSet, error) {
 			return loginCtx
 		},
 	}
-	serverDone := make(chan error, 1)
-	go func() {
-		serveErr := server.Serve(listener)
-		if errors.Is(serveErr, http.ErrServerClosed) {
-			serveErr = nil
-		}
-		serverDone <- serveErr
-	}()
-	serverStopped := false
+	expectedServes := 1
+	if ipv6Listener != nil {
+		expectedServes = 2
+	}
+	serverDone := make(chan error, expectedServes)
+	startServe := func(l net.Listener) {
+		go func() {
+			serveErr := server.Serve(l)
+			if errors.Is(serveErr, http.ErrServerClosed) {
+				serveErr = nil
+			}
+			serverDone <- serveErr
+		}()
+	}
+	startServe(listener)
+	if ipv6Listener != nil {
+		startServe(ipv6Listener)
+	}
+	finishedServes := 0
 	defer func() {
 		cancel()
 		_ = listener.Close()
+		if ipv6Listener != nil {
+			_ = ipv6Listener.Close()
+		}
 		_ = server.Close()
-		if !serverStopped {
+		for finishedServes < expectedServes {
 			<-serverDone
+			finishedServes++
 		}
 	}()
 
@@ -103,38 +118,47 @@ func (c *Client) Login(ctx context.Context, opener Opener) (TokenSet, error) {
 			return openBrowser(loginCtx, runtime.GOOS, startBrowserCommand, rawURL)
 		}
 	}
-	if err := opener(authorizeURL); err != nil {
-		return TokenSet{}, fmt.Errorf("open browser: %w", err)
-	}
+	openerDone := make(chan error, 1)
+	go func() {
+		openerDone <- opener(authorizeURL)
+	}()
 
-	select {
-	case <-ctx.Done():
-		return TokenSet{}, ctx.Err()
-	case serveErr := <-serverDone:
-		serverStopped = true
-		if serveErr == nil {
-			return TokenSet{}, errors.New("OAuth callback server stopped before login completed")
-		}
-		return TokenSet{}, fmt.Errorf("serve OAuth callback: %w", serveErr)
-	case callback := <-callbacks:
-		if callback.err != nil {
-			return TokenSet{}, callback.err
-		}
-		tokens, exchangeErr := c.ExchangeCode(loginCtx, callback.code, redirectURI, pkce)
-		reply := loginReply{success: exchangeErr == nil}
+	var openerCh <-chan error = openerDone
+	for {
 		select {
-		case callback.reply <- reply:
-		case <-callback.done:
 		case <-ctx.Done():
+			return TokenSet{}, ctx.Err()
+		case serveErr := <-serverDone:
+			finishedServes++
+			if serveErr == nil {
+				return TokenSet{}, errors.New("OAuth callback server stopped before login completed")
+			}
+			return TokenSet{}, fmt.Errorf("serve OAuth callback: %w", serveErr)
+		case err := <-openerCh:
+			openerCh = nil
+			if err != nil {
+				return TokenSet{}, fmt.Errorf("open browser: %w", err)
+			}
+		case callback := <-callbacks:
+			if callback.err != nil {
+				return TokenSet{}, callback.err
+			}
+			tokens, exchangeErr := c.ExchangeCode(loginCtx, callback.code, redirectURI, pkce)
+			reply := loginReply{success: exchangeErr == nil}
+			select {
+			case callback.reply <- reply:
+			case <-callback.done:
+			case <-ctx.Done():
+			}
+			select {
+			case <-callback.done:
+			case <-ctx.Done():
+			}
+			if exchangeErr != nil {
+				return TokenSet{}, fmt.Errorf("exchange OAuth authorization code: %w", exchangeErr)
+			}
+			return tokens, nil
 		}
-		select {
-		case <-callback.done:
-		case <-ctx.Done():
-		}
-		if exchangeErr != nil {
-			return TokenSet{}, fmt.Errorf("exchange OAuth authorization code: %w", exchangeErr)
-		}
-		return tokens, nil
 	}
 }
 
@@ -161,6 +185,11 @@ func listenForCallback(ctx context.Context, ports []uint16) (net.Listener, uint1
 		return nil, 0, errors.New("no OAuth callback ports configured")
 	}
 	return nil, 0, errors.Join(failures...)
+}
+
+func listenIPv6Loopback(ctx context.Context, port uint16) (net.Listener, error) {
+	address := fmt.Sprintf("[::1]:%d", port)
+	return (&net.ListenConfig{}).Listen(ctx, "tcp6", address)
 }
 
 func callbackHandler(ctx context.Context, expectedState string, callbacks chan<- loginCallback) http.Handler {

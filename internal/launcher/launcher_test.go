@@ -128,6 +128,51 @@ func TestProbeHealth(t *testing.T) {
 	}
 }
 
+func TestProbeHealthDoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+
+	healthyServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(writer).Encode(healthy())
+	}))
+	t.Cleanup(healthyServer.Close)
+
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, healthyServer.URL+"/healthz", http.StatusFound)
+	}))
+	t.Cleanup(redirectServer.Close)
+
+	_, err := ProbeHealth(context.Background(), redirectServer.URL+"/healthz")
+	if !errors.Is(err, ErrForeignListener) {
+		t.Fatalf("ProbeHealth() error = %v, want ErrForeignListener", err)
+	}
+}
+
+func TestProbeHealthHangIsForeignListener(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		<-t.Context().Done()
+	}()
+
+	_, err = ProbeHealth(context.Background(), "http://"+listener.Addr().String()+"/healthz")
+	if !errors.Is(err, ErrForeignListener) {
+		t.Fatalf("ProbeHealth() error = %v, want ErrForeignListener", err)
+	}
+}
+
 func TestRunReusesHealthyProxyAndBuildsClaudeEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -306,6 +351,12 @@ func TestRunSpawnsCurrentExecutableAndWaitsForReadiness(t *testing.T) {
 	if commands[1].Path != "/test/claude" || !reflect.DeepEqual(commands[1].Args, []string{"--print"}) {
 		t.Fatalf("Claude command = %#v", commands[1])
 	}
+	if !commands[0].DetachProcessGroup {
+		t.Fatal("proxy spawn missing DetachProcessGroup")
+	}
+	if commands[1].DetachProcessGroup {
+		t.Fatal("Claude spawn unexpectedly detached process group")
+	}
 	if proxy.killed.Load() {
 		t.Fatal("healthy spawned proxy was killed")
 	}
@@ -358,6 +409,74 @@ func TestRunReportsProxyExitBeforeReadiness(t *testing.T) {
 	}
 	if proxy.killed.Load() || !proxy.waited.Load() {
 		t.Fatalf("exited proxy killed=%v waited=%v", proxy.killed.Load(), proxy.waited.Load())
+	}
+}
+
+func TestRunReusesHealthyListenerWhenSpawnedProxyExits(t *testing.T) {
+	t.Parallel()
+
+	proxy := newProcessStub()
+	var probes atomic.Int32
+	options := testOptions(8484)
+	options.ReadyTimeout = 2 * time.Second
+	options.ProbeInterval = time.Hour
+	options.Dependencies = testDependencies()
+	options.Dependencies.Probe = func(context.Context, string) (Health, error) {
+		switch probes.Add(1) {
+		case 1:
+			return Health{}, ErrProxyUnavailable
+		case 2:
+			proxy.complete(errors.New("serve exited 23"))
+			return Health{}, ErrProxyUnavailable
+		default:
+			if proxy.waited.Load() {
+				return healthy(), nil
+			}
+			return Health{}, ErrProxyUnavailable
+		}
+	}
+	options.Dependencies.Spawn = func(_ context.Context, command Command) (Process, error) {
+		if command.Path == "/test/clodex" {
+			return proxy, nil
+		}
+		claude := newProcessStub()
+		claude.complete(nil)
+		return claude, nil
+	}
+
+	if err := Run(context.Background(), nil, options); err != nil {
+		t.Fatalf("Run() error = %v, want reuse after spawned proxy exit", err)
+	}
+	if proxy.killed.Load() || !proxy.waited.Load() {
+		t.Fatalf("exited proxy killed=%v waited=%v", proxy.killed.Load(), proxy.waited.Load())
+	}
+}
+
+func TestRunReportsForeignListenerWhenSpawnedProxyExits(t *testing.T) {
+	t.Parallel()
+
+	proxy := newProcessStub()
+	var probes atomic.Int32
+	options := testOptions(8484)
+	options.ReadyTimeout = 2 * time.Second
+	options.ProbeInterval = time.Hour
+	options.Dependencies = testDependencies()
+	options.Dependencies.Probe = func(context.Context, string) (Health, error) {
+		switch probes.Add(1) {
+		case 1:
+			return Health{}, ErrProxyUnavailable
+		case 2:
+			proxy.complete(errors.New("serve exited 23"))
+			return Health{}, ErrProxyUnavailable
+		default:
+			return Health{}, ErrForeignListener
+		}
+	}
+	options.Dependencies.Spawn = func(context.Context, Command) (Process, error) { return proxy, nil }
+
+	err := Run(context.Background(), nil, options)
+	if !errors.Is(err, ErrForeignListener) {
+		t.Fatalf("Run() error = %v, want ErrForeignListener", err)
 	}
 }
 

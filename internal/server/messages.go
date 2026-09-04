@@ -262,6 +262,13 @@ func (service *MessagesService) stream(writer http.ResponseWriter, request *http
 			return
 		case <-heartbeat:
 			if err := encoder.Ping(); err != nil {
+				if errors.Is(err, anthropicstream.ErrStreamFinished) {
+					if timer != nil {
+						timer.Stop()
+					}
+					heartbeat = nil
+					continue
+				}
 				cancel()
 				<-done
 				return
@@ -305,6 +312,10 @@ func (service *MessagesService) stream(writer http.ResponseWriter, request *http
 			return
 		}
 	}
+}
+
+func sessionFromHeader(claudeSession string) (upstream.Session, error) {
+	return (&MessagesService{random: rand.Reader}).session(claudeSession)
 }
 
 func (service *MessagesService) session(claudeSession string) (upstream.Session, error) {

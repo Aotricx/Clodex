@@ -42,6 +42,7 @@ type Encoder struct {
 	started  bool
 	finished bool
 	matched  string
+	matchAt  int
 	open     map[int]*openBlock
 }
 
@@ -204,6 +205,7 @@ func (e *Encoder) contentDelta(event reducer.Event) error {
 		text = result.Text
 		if result.Matched != "" {
 			e.matched = result.Matched
+			e.matchAt = event.Index
 		}
 	}
 	if text == "" {
@@ -256,6 +258,10 @@ func (e *Encoder) contentStop(event reducer.Event) error {
 			return nil
 		}
 		return fmt.Errorf("%w: stop for unopened index %d", ErrInvalidEvent, event.Index)
+	}
+	if e.matched != "" && event.Index > e.matchAt {
+		delete(e.open, event.Index)
+		return nil
 	}
 	if state.kind == reducer.BlockText && e.matched == "" {
 		result := state.scanner.Finish()

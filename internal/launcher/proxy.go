@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -49,12 +50,22 @@ func ProbeHealth(ctx context.Context, target string) (Health, error) {
 	if err != nil {
 		return Health{}, fmt.Errorf("probe Clodex health: create request: %w", err)
 	}
-	response, err := (&http.Client{Timeout: healthRequestTimeout}).Do(request)
+	client := &http.Client{
+		Timeout: healthRequestTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Health{}, ctx.Err()
 		}
-		return Health{}, fmt.Errorf("%w at %s: %v", ErrProxyUnavailable, target, err)
+		kind := ErrProxyUnavailable
+		if isProbeTimeout(err) {
+			kind = ErrForeignListener
+		}
+		return Health{}, fmt.Errorf("%w at %s: %v", kind, target, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -78,6 +89,14 @@ func ProbeHealth(ctx context.Context, target string) (Health, error) {
 		return Health{}, err
 	}
 	return health, nil
+}
+
+func isProbeTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func validateHealth(target string, health Health) error {
@@ -104,11 +123,12 @@ func ensureProxy(ctx context.Context, healthURL string, environment []string, op
 		return errors.New("run Claude Code: current executable lookup returned an empty path")
 	}
 	process, err := dependencies.Spawn(context.Background(), Command{
-		Path:   executable,
-		Args:   []string{"serve", "--port", strconv.Itoa(options.Port)},
-		Env:    append([]string(nil), environment...),
-		Stdout: dependencies.Stdout,
-		Stderr: dependencies.Stderr,
+		Path:               executable,
+		Args:               []string{"serve", "--port", strconv.Itoa(options.Port)},
+		Env:                append([]string(nil), environment...),
+		Stdout:             dependencies.Stdout,
+		Stderr:             dependencies.Stderr,
+		DetachProcessGroup: true,
 	})
 	if err != nil {
 		return fmt.Errorf("run Claude Code: start Clodex proxy: %w", err)
@@ -145,6 +165,13 @@ func waitForProxy(ctx context.Context, healthURL string, process Process, exited
 			cleanupErr := stopFailedProxy(process, exited)
 			return errors.Join(ctx.Err(), cleanupErr)
 		case waitErr := <-exited:
+			probeErr := probeOnce(ctx, healthURL, probe)
+			if probeErr == nil {
+				return nil
+			}
+			if !errors.Is(probeErr, ErrProxyUnavailable) {
+				return fmt.Errorf("run Claude Code: spawned proxy failed identity check: %w", probeErr)
+			}
 			if waitErr == nil {
 				return errors.New("run Claude Code: proxy exited before becoming healthy")
 			}

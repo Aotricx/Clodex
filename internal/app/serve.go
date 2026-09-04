@@ -60,6 +60,7 @@ type ServeOptions struct {
 	AuthPath    string
 	CatalogPath string
 	DumpDir     string
+	HomeDir     func() (string, error)
 	Stderr      io.Writer
 	Ready       func(net.Addr)
 }
@@ -73,18 +74,24 @@ func Serve(ctx context.Context, options ServeOptions) error {
 	if options.Version == "" {
 		return errors.New("start Clodex: version is required")
 	}
-	paths, err := DefaultPaths(nil)
-	if err != nil {
-		return err
-	}
-	if options.AuthPath != "" {
-		paths.Auth = options.AuthPath
-	}
-	if options.CatalogPath != "" {
-		paths.Catalog = options.CatalogPath
-	}
-	if options.DumpDir != "" {
-		paths.Dump = options.DumpDir
+	var paths Paths
+	if options.AuthPath != "" && options.CatalogPath != "" && options.DumpDir != "" {
+		paths = Paths{Auth: options.AuthPath, Catalog: options.CatalogPath, Dump: options.DumpDir}
+	} else {
+		resolved, err := DefaultPaths(options.HomeDir)
+		if err != nil {
+			return err
+		}
+		paths = resolved
+		if options.AuthPath != "" {
+			paths.Auth = options.AuthPath
+		}
+		if options.CatalogPath != "" {
+			paths.Catalog = options.CatalogPath
+		}
+		if options.DumpDir != "" {
+			paths.Dump = options.DumpDir
+		}
 	}
 	stderr := options.Stderr
 	if stderr == nil {
@@ -109,7 +116,7 @@ func Serve(ctx context.Context, options ServeOptions) error {
 	if _, err := model.Resolve(resolution.Catalog, options.Config.Model, options.Config.Model, 0); err != nil {
 		return fmt.Errorf("start Clodex: default model: %w", err)
 	}
-	if _, err := model.Resolve(resolution.Catalog, options.Config.SmallFastModel, options.Config.Model, 0); err != nil {
+	if _, err := model.Resolve(resolution.Catalog, options.Config.SmallFastModel, options.Config.SmallFastModel, 0); err != nil {
 		return fmt.Errorf("start Clodex: small fast model: %w", err)
 	}
 

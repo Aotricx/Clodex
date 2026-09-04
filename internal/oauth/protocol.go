@@ -27,7 +27,10 @@ const (
 	defaultOriginator     = "codex_cli_rs"
 	defaultDeviceTimeout  = 15 * time.Minute
 	maxErrorBodyBytes     = 4096
+	defaultHTTPTimeout    = 30 * time.Second
 )
+
+var defaultHTTPClient = &http.Client{Timeout: defaultHTTPTimeout}
 
 type PKCE struct {
 	Verifier  string
@@ -481,7 +484,7 @@ func (c *Client) clientID() string {
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient == nil {
-		return http.DefaultClient
+		return defaultHTTPClient
 	}
 	return c.HTTPClient
 }

@@ -149,17 +149,24 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 	effortFloored := false
 	attempts := 0
 	runStart := engine.now()
+	holdingAttempt := false
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
-		if err := engine.Retry.Allow(); err != nil {
-			return Result{}, protectionError(err)
+		if !holdingAttempt {
+			if err := engine.Retry.Allow(); err != nil {
+				return Result{}, protectionError(err)
+			}
+			holdingAttempt = true
 		}
 		attempts++
 		streamStart := engine.now()
 		response, transportErr := engine.Transport.Stream(ctx, request.Session, current)
+		if transportErr == nil && response == nil {
+			transportErr = errors.New("Codex transport returned nil response")
+		}
 		if transportErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Result{}, ctxErr
@@ -177,11 +184,9 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			if err := engine.prepareRetry(ctx, transientRetriesUsed+1, "", true); err != nil {
 				return Result{}, err
 			}
+			holdingAttempt = false
 			transientRetriesUsed++
 			continue
-		}
-		if response == nil {
-			return Result{}, networkError(errors.New("Codex transport returned nil response"))
 		}
 
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -214,6 +219,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			if err := engine.prepareRetry(ctx, transientRetriesUsed+1, mapped.RetryAfter, true); err != nil {
 				return Result{}, err
 			}
+			holdingAttempt = false
 			transientRetriesUsed++
 			continue
 		}
@@ -254,6 +260,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			if retryErr := engine.prepareRetry(ctx, transientRetriesUsed+1, apiError.Failure.RetryAfter, true); retryErr != nil {
 				return Result{}, retryErr
 			}
+			holdingAttempt = false
 			transientRetriesUsed++
 			continue
 		}
@@ -348,6 +355,16 @@ func (engine *Engine) consume(ctx context.Context, streaming bool, response *htt
 			firstEventAt = engine.now()
 		}
 		retryEvent = sanitizeEvent(upstreamEvent.Raw)
+		if final != nil {
+			if upstreamEvent.Type == "codex.rate_limits" {
+				snapshot, parseErr := ratelimit.ParseEvent(upstreamEvent.Raw, engine.now())
+				if parseErr == nil {
+					ratelimit.ApplyResponseHeaders(headers, snapshot)
+					engine.rateLimit(snapshot)
+				}
+			}
+			continue
+		}
 		if upstreamEvent.Type == "codex.rate_limits" {
 			snapshot, parseErr := ratelimit.ParseEvent(upstreamEvent.Raw, engine.now())
 			if parseErr != nil {
@@ -420,8 +437,16 @@ func semanticEvents(events []reducer.Event) bool {
 }
 
 func (engine *Engine) prepareRetry(ctx context.Context, attempt int, retryAfter string, failureEvent bool) error {
+	if retryAfter != "" {
+		if _, err := engine.Retry.Delay(attempt, retryAfter); err != nil {
+			return wrapWaitError(err, retryAfter)
+		}
+	}
 	if failureEvent {
 		engine.Retry.Failed(true)
+		if engine.Retry.Snapshot().State == retry.StateOpen {
+			return protectionError(retry.ErrCircuitOpen)
+		}
 	}
 	if err := engine.Retry.ReserveRetry(); err != nil {
 		return protectionError(err)
@@ -431,7 +456,10 @@ func (engine *Engine) prepareRetry(ctx context.Context, attempt int, retryAfter 
 		wait = engine.Retry.Wait
 	}
 	if err := wait(ctx, attempt, retryAfter); err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return wrapWaitError(err, retryAfter)
 	}
 	return nil
 }
@@ -505,6 +533,13 @@ func networkError(err error) *Error {
 
 func protectionError(err error) *Error {
 	return apiError(http.StatusServiceUnavailable, "api_error", err.Error(), "", false)
+}
+
+func wrapWaitError(err error, retryAfter string) *Error {
+	if errors.Is(err, retry.ErrRetryAfterTooLong) {
+		return apiError(http.StatusServiceUnavailable, "rate_limit_error", err.Error(), retryAfter, false)
+	}
+	return protectionError(err)
 }
 
 func apiError(statusCode int, errorType, message, retryAfter string, retryable bool) *Error {

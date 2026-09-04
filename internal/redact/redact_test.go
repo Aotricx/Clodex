@@ -146,6 +146,30 @@ func TestURLNilPreserved(t *testing.T) {
 	}
 }
 
+func TestURLRedactsEmailPasswordAndCodeVerifierQuery(t *testing.T) {
+	source := &url.URL{
+		Scheme: "https",
+		Host:   "example.test",
+		Path:   "/",
+		RawQuery: url.Values{
+			"email":         {"user@example.com"},
+			"password":      {"secret"},
+			"code_verifier": {"pkce-secret"},
+		}.Encode(),
+	}
+
+	got := URL(source)
+
+	for _, key := range []string{"email", "password", "code_verifier"} {
+		if value := got.Query().Get(key); value != Marker {
+			t.Errorf("query %q = %q, want marker", key, value)
+		}
+	}
+	if source.Query().Get("email") != "user@example.com" {
+		t.Fatal("URL mutated source email query")
+	}
+}
+
 func TestJSONRedactsSensitiveFieldsRecursively(t *testing.T) {
 	input := []byte(`{
 		"access_token":"access-secret",
@@ -246,7 +270,7 @@ func TestJSONRedactsEverySensitiveValueType(t *testing.T) {
 }
 
 func TestSensitiveNameCoversOAuthCredentialsButNotBackendErrorCode(t *testing.T) {
-	for _, name := range []string{"code_verifier", "authorization_code", "device_auth_id", "user_code", "openai_access_token", "client-secret"} {
+	for _, name := range []string{"code_verifier", "authorization_code", "device_auth_id", "user_code", "openai_access_token", "client-secret", "password", "encrypted_content"} {
 		if !SensitiveName(name) {
 			t.Errorf("SensitiveName(%q) = false", name)
 		}
@@ -255,6 +279,53 @@ func TestSensitiveNameCoversOAuthCredentialsButNotBackendErrorCode(t *testing.T)
 		if SensitiveName(name) {
 			t.Errorf("SensitiveName(%q) = true", name)
 		}
+	}
+}
+
+func TestJSONRedactsPassword(t *testing.T) {
+	got, err := JSON([]byte(`{"password":"x","safe":"ok"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["password"] != Marker {
+		t.Errorf("password = %#v, want marker", decoded["password"])
+	}
+	if decoded["safe"] != "ok" {
+		t.Errorf("safe = %#v, want %q", decoded["safe"], "ok")
+	}
+}
+
+func TestJSONAndSSERedactEncryptedContentOnReasoningItem(t *testing.T) {
+	input := []byte(`{"type":"reasoning","id":"rs_1","encrypted_content":"gAAAAA-ciphertext-blob","summary":[]}`)
+
+	got, err := JSON(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["encrypted_content"] != Marker {
+		t.Errorf("JSON encrypted_content = %#v, want marker", decoded["encrypted_content"])
+	}
+	if decoded["type"] != "reasoning" || decoded["id"] != "rs_1" {
+		t.Errorf("reasoning envelope changed: %#v", decoded)
+	}
+	if bytes.Contains(got, []byte("gAAAAA-ciphertext-blob")) {
+		t.Errorf("JSON still contains ciphertext: %s", got)
+	}
+
+	sse := SSE([]byte("event: response.output_item.done\ndata: " + string(input) + "\n\n"))
+	if bytes.Contains(sse, []byte("gAAAAA-ciphertext-blob")) {
+		t.Fatalf("SSE still contains ciphertext: %s", sse)
+	}
+	if !bytes.Contains(sse, []byte(`"encrypted_content":"`+Marker+`"`)) {
+		t.Fatalf("SSE missing redacted encrypted_content: %s", sse)
 	}
 }
 
@@ -380,6 +451,8 @@ func TestTextRedactsBearersAndJWTsWithoutCorruptingBenignDots(t *testing.T) {
 		{"multiple", syntheticJWT + " then Bearer other-secret", Marker + " then Bearer " + Marker},
 		{"structured plaintext", "access_token=synthetic account-id: account-secret", "access_token=" + Marker + " account-id: " + Marker},
 		{"generic token plaintext", "token=synthetic token_count=12", "token=" + Marker + " token_count=12"},
+		{"password plaintext", "password=secret", "password=" + Marker},
+		{"code verifier plaintext", "code_verifier=pkce-secret", "code_verifier=" + Marker},
 		{"quoted structured plaintext", `{"api_key":"synthetic","message":"safe"}`, `{"api_key":"` + Marker + `","message":"safe"}`},
 		{"versions and IPs", "versions 1.2.3 and 10.20.30.40", "versions 1.2.3 and 10.20.30.40"},
 		{"ordinary dotted words", "alpha.beta.gamma package.name and bearer", "alpha.beta.gamma package.name and bearer"},

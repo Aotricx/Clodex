@@ -2,9 +2,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -115,11 +116,19 @@ func LoadServe(args []string, lookupEnv func(string) (string, bool)) (Config, er
 		cfg.CircuitCooldown = value
 	}
 
+	var usage bytes.Buffer
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags.SetOutput(&usage)
 	flags.IntVar(&cfg.Port, "port", cfg.Port, "loopback listen port")
 	flags.BoolVar(&cfg.DebugWire, "debug-wire", cfg.DebugWire, "log wire traffic")
+	flags.Usage = func() {
+		fmt.Fprintf(flags.Output(), "Usage: clodex serve [--port N] [--debug-wire]\n")
+		flags.PrintDefaults()
+	}
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return Config{}, &serveHelpError{usage: strings.TrimSpace(usage.String())}
+		}
 		return Config{}, fmt.Errorf("serve arguments: %w", err)
 	}
 	if flags.NArg() != 0 {
@@ -135,6 +144,21 @@ func LoadServe(args []string, lookupEnv func(string) (string, bool)) (Config, er
 // ListenAddr returns the fixed loopback listen address.
 func (cfg Config) ListenAddr() string {
 	return fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+}
+
+type serveHelpError struct {
+	usage string
+}
+
+func (e *serveHelpError) Error() string {
+	if e == nil || e.usage == "" {
+		return flag.ErrHelp.Error()
+	}
+	return e.usage
+}
+
+func (e *serveHelpError) Unwrap() error {
+	return flag.ErrHelp
 }
 
 func envInt(lookupEnv func(string) (string, bool), key string) (int, bool, error) {

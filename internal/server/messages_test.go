@@ -140,6 +140,35 @@ func TestMessagesStreamingEmitsIdlePingAfterCommit(t *testing.T) {
 	}
 }
 
+func TestMessagesStreamingHeartbeatAfterMessageStopStillRecordsSuccess(t *testing.T) {
+	completed := make(chan struct{})
+	release := make(chan struct{})
+	transport := &lingeringMessageTransport{completed: completed, release: release}
+	service := testMessagesService(t, transport)
+	service.heartbeatInterval = 5 * time.Millisecond
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		service.ServeHTTP(response, request)
+		close(done)
+	}()
+	<-completed
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	<-done
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "event: message_stop") {
+		t.Fatalf("stream missing message_stop: %s", response.Body.String())
+	}
+	timing := service.status.Snapshot().Timing
+	if timing.Count != 1 || len(timing.Samples) != 1 {
+		t.Fatalf("timing = %+v, want success recorded after a completed stream whose body lingered past heartbeat", timing)
+	}
+}
+
 func testMessagesService(t *testing.T, transport engine.Transport) *MessagesService {
 	t.Helper()
 	controller, err := retry.NewReal(retry.Config{
@@ -217,6 +246,25 @@ func (transport *messageTransport) Requests() []codexwire.Request {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	return append([]codexwire.Request(nil), transport.requests...)
+}
+
+type lingeringMessageTransport struct {
+	completed chan struct{}
+	release   chan struct{}
+}
+
+func (transport *lingeringMessageTransport) Stream(ctx context.Context, _ upstream.Session, _ codexwire.Request) (*http.Response, error) {
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = writer.Write(messageSuccessSSE("hello"))
+		close(transport.completed)
+		select {
+		case <-transport.release:
+		case <-ctx.Done():
+		}
+		_ = writer.Close()
+	}()
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: reader}, nil
 }
 
 type blockingMessageTransport struct {

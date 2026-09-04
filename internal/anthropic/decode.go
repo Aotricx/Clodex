@@ -90,6 +90,9 @@ func decodeRequest(r io.Reader, requireMaxTokens bool) (*MessageRequest, error) 
 		if req.System, err = decodeContent(systemRaw, "system"); err != nil {
 			return nil, err
 		}
+		if len(req.System) == 0 {
+			return nil, invalidRequest("system must not be empty")
+		}
 		if err := validateContentPlacement(req.System, "system", "system"); err != nil {
 			return nil, err
 		}
@@ -110,8 +113,15 @@ func decodeRequest(r io.Reader, requireMaxTokens bool) (*MessageRequest, error) 
 		}
 	}
 	if stopRaw, present := object["stop_sequences"]; present {
-		if isNull(stopRaw) || json.Unmarshal(stopRaw, &req.StopSequences) != nil {
+		var elements []json.RawMessage
+		if isNull(stopRaw) || json.Unmarshal(stopRaw, &elements) != nil {
 			return nil, invalidRequest("stop_sequences must be an array of strings")
+		}
+		req.StopSequences = make([]string, len(elements))
+		for i, element := range elements {
+			if isNull(element) || json.Unmarshal(element, &req.StopSequences[i]) != nil {
+				return nil, invalidRequest("stop_sequences must be an array of strings")
+			}
 		}
 	}
 	if temperatureRaw, present := object["temperature"]; present {
@@ -169,10 +179,13 @@ func decodeMessage(raw json.RawMessage, path string) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
+	if len(content) == 0 {
+		return Message{}, invalidRequest("%s must not be empty", path+".content")
+	}
 	if err := validateContentPlacement(content, role, path+".content"); err != nil {
 		return Message{}, err
 	}
-	return Message{Role: role, Content: content}, nil
+	return Message{Role: role, Content: content, Raw: cloneRaw(raw)}, nil
 }
 
 func decodeContent(raw json.RawMessage, path string) ([]ContentBlock, error) {
@@ -432,7 +445,7 @@ func decodeToolChoice(raw json.RawMessage) (*ToolChoice, error) {
 	if choiceType != "auto" && choiceType != "any" && choiceType != "tool" && choiceType != "none" {
 		return nil, invalidRequest("tool_choice.type %q is unsupported", choiceType)
 	}
-	choice := &ToolChoice{Type: choiceType}
+	choice := &ToolChoice{Type: choiceType, Raw: cloneRaw(raw)}
 	if choiceType == "tool" {
 		if choice.Name, err = requiredNonemptyString(object, "name", "tool_choice.name"); err != nil {
 			return nil, err
@@ -460,7 +473,7 @@ func decodeThinkingConfig(raw json.RawMessage) (*ThinkingConfig, error) {
 	if thinkingType != "enabled" && thinkingType != "disabled" && thinkingType != "adaptive" {
 		return nil, invalidRequest("thinking.type %q is unsupported", thinkingType)
 	}
-	thinking := &ThinkingConfig{Type: thinkingType}
+	thinking := &ThinkingConfig{Type: thinkingType, Raw: cloneRaw(raw)}
 	if thinkingType == "enabled" {
 		budgetRaw, present := object["budget_tokens"]
 		if !present || json.Unmarshal(budgetRaw, &thinking.BudgetTokens) != nil {
@@ -508,7 +521,7 @@ func optionalCacheControl(object map[string]json.RawMessage, field, path string)
 	if cacheType != "ephemeral" {
 		return nil, invalidRequest("%s.type must be ephemeral", path)
 	}
-	cache := &CacheControl{Type: cacheType}
+	cache := &CacheControl{Type: cacheType, Raw: cloneRaw(raw)}
 	if ttlRaw, present := cacheObject["ttl"]; present {
 		if err := json.Unmarshal(ttlRaw, &cache.TTL); err != nil || cache.TTL != "5m" && cache.TTL != "1h" {
 			return nil, invalidRequest("%s.ttl must be 5m or 1h", path)

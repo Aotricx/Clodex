@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Aotricx/Clodex/internal/redact"
 )
 
 const supportedVersion = 1
@@ -191,10 +193,9 @@ func rejectSensitiveValues(value any, path string) error {
 	case map[string]any:
 		for key, child := range value {
 			childPath := path + "." + key
-			if _, sensitive := sensitiveKeys[normalizeKey(key)]; sensitive {
-				redacted, ok := child.(string)
-				if !ok || redacted != "[REDACTED]" {
-					return fmt.Errorf("%s must be literal [REDACTED]", childPath)
+			if sensitiveFixtureKey(key) {
+				if err := rejectSensitiveKeyValue(child, childPath); err != nil {
+					return err
 				}
 				continue
 			}
@@ -210,6 +211,24 @@ func rejectSensitiveValues(value any, path string) error {
 		}
 	}
 	return nil
+}
+
+func sensitiveFixtureKey(key string) bool {
+	if _, sensitive := sensitiveKeys[normalizeKey(key)]; sensitive {
+		return true
+	}
+	return redact.SensitiveName(key)
+}
+
+func rejectSensitiveKeyValue(value any, path string) error {
+	redacted, ok := value.(string)
+	if !ok {
+		return rejectSensitiveValues(value, path)
+	}
+	if redacted == "[REDACTED]" || redacted == redact.Marker {
+		return nil
+	}
+	return fmt.Errorf("%s must be literal [REDACTED]", path)
 }
 
 func normalizeKey(key string) string {

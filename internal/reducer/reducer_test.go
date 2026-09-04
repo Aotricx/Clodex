@@ -324,6 +324,52 @@ func TestReducerTerminalTable(t *testing.T) {
 	}
 }
 
+func TestReducerIncompleteMissingUsageIsMaxTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  []codexstream.Event
+		terminal string
+	}{
+		{
+			name:     "empty usage object",
+			terminal: `{"type":"response.incomplete","response":{"id":"i","incomplete_details":{"reason":"max_output_tokens"},"usage":{}}}`,
+		},
+		{
+			name:     "omitted usage",
+			terminal: `{"type":"response.incomplete","response":{"id":"i","incomplete_details":{"reason":"max_output_tokens"}}}`,
+		},
+		{
+			name:     "semantic text with empty usage",
+			content:  []codexstream.Event{event(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}`)},
+			terminal: `{"type":"response.incomplete","response":{"id":"i","incomplete_details":{"reason":"max_output_tokens"},"usage":{}}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New()
+			for _, item := range tt.content {
+				if _, err := r.Push(item); err != nil {
+					t.Fatalf("content Push: %v", err)
+				}
+			}
+			out, err := r.Push(event(tt.terminal))
+			if err != nil {
+				t.Fatalf("Push incomplete: %v", err)
+			}
+			if len(out) == 0 || out[len(out)-1].Kind != KindTerminal || out[len(out)-1].Terminal.StopReason != StopMaxTokens {
+				t.Fatalf("terminal events = %#v", out)
+			}
+			result, err := r.Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.StopReason != StopMaxTokens || result.Usage != (Usage{}) {
+				t.Fatalf("Result = %#v, want StopMaxTokens and zero usage", result)
+			}
+		})
+	}
+}
+
 func TestReducerUsageUsesUpstreamTotalsWithoutDoubleCountingReasoning(t *testing.T) {
 	r := New()
 	input := []codexstream.Event{
@@ -433,6 +479,22 @@ func TestReducerDuplicateTerminalRules(t *testing.T) {
 	}
 	if _, err := r.Push(event(`{"type":"response.output_text.delta","output_index":0,"delta":"late"}`)); !errors.Is(err, ErrEventAfterTerminal) {
 		t.Fatalf("event after terminal = %v", err)
+	}
+}
+
+func TestReducerPushAfterFinalErrKeepsReturningThatError(t *testing.T) {
+	r := New()
+	terminal := event(completed(`{"id":"e","usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}`))
+	_, err := r.Push(terminal)
+	requireError(t, err, ErrEmptyCompletion)
+
+	out, err := r.Push(terminal)
+	if len(out) != 0 || !errors.Is(err, ErrEmptyCompletion) {
+		t.Fatalf("duplicate terminal after finalErr = %#v, %v", out, err)
+	}
+	out, err = r.Push(event(`{"type":"response.output_text.delta","output_index":0,"delta":"late"}`))
+	if len(out) != 0 || !errors.Is(err, ErrEmptyCompletion) {
+		t.Fatalf("event after finalErr = %#v, %v", out, err)
 	}
 }
 

@@ -160,11 +160,15 @@ func (s *Store) validatePath() error {
 }
 
 func (s *Store) writeAtomic(encoded, expected []byte, expectedExists bool) (result error) {
-	dir := filepath.Dir(s.Path)
+	writePath, err := resolveAuthWritePath(s.Path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(writePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("prepare auth directory: %w", err)
 	}
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(s.Path)+".tmp-*")
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(writePath)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create auth temporary file: %w", err)
 	}
@@ -193,24 +197,46 @@ func (s *Store) writeAtomic(encoded, expected []byte, expectedExists bool) (resu
 	closed = true
 
 	if s.beforeRename != nil {
-		if err := s.beforeRename(tempPath, s.Path); err != nil {
+		if err := s.beforeRename(tempPath, writePath); err != nil {
 			return safeWrap("prepare auth rename failed", err)
 		}
 	}
-	changed, err := targetChanged(s.Path, expected, expectedExists)
+	changed, err := targetChanged(writePath, expected, expectedExists)
 	if err != nil {
 		return err
 	}
 	if changed {
 		return errAuthChanged
 	}
-	if err := os.Rename(tempPath, s.Path); err != nil {
+	if err := os.Rename(tempPath, writePath); err != nil {
 		return fmt.Errorf("rename auth temporary file: %w", err)
 	}
 	if err := syncDirectory(dir); err != nil {
 		return fmt.Errorf("sync auth directory: %w", err)
 	}
 	return nil
+}
+
+// resolveAuthWritePath returns the path that atomic temp+rename must replace.
+// A symlink is resolved so the write lands on the target file and leaves the
+// link inode in place. A missing path is created at path. A regular file is
+// used as-is, including when an ancestor directory is itself a symlink.
+func resolveAuthWritePath(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return path, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("stat auth path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve auth symlink: %w", err)
+	}
+	return resolved, nil
 }
 
 func targetChanged(path string, expected []byte, expectedExists bool) (bool, error) {

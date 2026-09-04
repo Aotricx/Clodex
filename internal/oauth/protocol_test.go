@@ -421,3 +421,13 @@ func TestHTTPErrorRedactsMalformedAndTruncatedSecrets(t *testing.T) {
 		t.Fatalf("error body length = %d", len(httpErr.Body))
 	}
 }
+
+func TestZeroValueClientHTTPClientIsNotDefaultClient(t *testing.T) {
+	got := (&Client{}).httpClient()
+	if got == http.DefaultClient {
+		t.Fatal("zero-value Client httpClient() == http.DefaultClient")
+	}
+	if got.Timeout == 0 {
+		t.Fatal("zero-value Client httpClient() has no Timeout")
+	}
+}

@@ -254,3 +254,32 @@ func (e EncryptedContent) MarshalJSON() ([]byte, error) {
 		EncryptedContent string `json:"encrypted_content"`
 	}{Type: "encrypted_content", EncryptedContent: e.EncryptedContent})
 }
+
+// WebSearchCall is an assistant-hosted web search retained in request history.
+type WebSearchCall struct {
+	ID     string
+	Status string
+	Action WebSearchAction
+}
+
+func (WebSearchCall) inputItem() {}
+
+func (w WebSearchCall) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type   string          `json:"type"`
+		ID     string          `json:"id"`
+		Status string          `json:"status"`
+		Action WebSearchAction `json:"action"`
+	}{
+		Type:   "web_search_call",
+		ID:     w.ID,
+		Status: w.Status,
+		Action: w.Action,
+	})
+}
+
+// WebSearchAction is the search action carried by a web_search_call item.
+type WebSearchAction struct {
+	Type  string `json:"type"`
+	Query string `json:"query"`
+}

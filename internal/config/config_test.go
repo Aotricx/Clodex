@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"flag"
 	"reflect"
 	"strings"
 	"testing"
@@ -250,6 +252,19 @@ func TestLoadServeRejectsEverySetButEmptyEnvironmentValue(t *testing.T) {
 				t.Fatalf("LoadServe() error = %q, want it to name %q", err, key)
 			}
 		})
+	}
+}
+
+func TestLoadServeHelpUnwrapsFlagErrHelpAndIncludesUsage(t *testing.T) {
+	_, err := LoadServe([]string{"--help"}, envLookup(nil))
+	if err == nil {
+		t.Fatal("LoadServe(--help) error = nil, want flag.ErrHelp")
+	}
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("LoadServe(--help) error = %v, want errors.Is flag.ErrHelp", err)
+	}
+	if !strings.Contains(err.Error(), "--port") {
+		t.Fatalf("LoadServe(--help) error = %q, want usage mentioning --port", err)
 	}
 }
 

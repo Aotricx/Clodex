@@ -4,7 +4,7 @@ Clodex contains or materially adapts the projects listed below. Clodex's root
 MIT `LICENSE` remains unchanged; these notices preserve the applicable
 third-party attributions and license terms. This root file is canonical.
 `internal/notices/THIRD_PARTY_NOTICES.md` is a byte-identical embedded copy
-used by the Go package for future `clodex licenses` output.
+used by the Go package for `clodex licenses` output.
 
 ## raine/claude-code-proxy
 

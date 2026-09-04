@@ -103,6 +103,9 @@ func (p *Parser) Next() (Event, error) {
 		}
 		line, err := p.readLine()
 		if err != nil {
+			if len(line) > 0 && errors.Is(err, io.EOF) {
+				p.applyLine(line)
+			}
 			return Event{}, p.finish(err)
 		}
 		if len(line) == 0 {
@@ -119,25 +122,7 @@ func (p *Parser) Next() (Event, error) {
 			}
 			continue
 		}
-		p.frameActive = true
-		if line[0] == ':' {
-			continue
-		}
-		field, value := splitField(line)
-		switch field {
-		case "event":
-			p.eventName = string(value)
-		case "data":
-			p.data = append(p.data, bytes.Clone(value))
-		case "id":
-			if !bytes.ContainsRune(value, '\x00') {
-				p.lastID = string(value)
-			}
-		case "retry":
-			if millis, parseErr := strconv.ParseInt(string(value), 10, 64); parseErr == nil && millis >= 0 {
-				p.retry = time.Duration(millis) * time.Millisecond
-			}
-		}
+		p.applyLine(line)
 	}
 }
 
@@ -182,6 +167,10 @@ func (p *Parser) finish(err error) error {
 		p.ended = err
 		return err
 	}
+	if p.terminal && len(p.data) == 0 {
+		p.ended = io.EOF
+		return p.ended
+	}
 	if p.frameActive || p.frameBytes != 0 {
 		p.ended = ErrTruncatedFrame
 		return p.ended
@@ -192,6 +181,28 @@ func (p *Parser) finish(err error) error {
 		p.ended = ErrEOFWithoutTerminal
 	}
 	return p.ended
+}
+
+func (p *Parser) applyLine(line []byte) {
+	p.frameActive = true
+	if line[0] == ':' {
+		return
+	}
+	field, value := splitField(line)
+	switch field {
+	case "event":
+		p.eventName = string(value)
+	case "data":
+		p.data = append(p.data, bytes.Clone(value))
+	case "id":
+		if !bytes.ContainsRune(value, '\x00') {
+			p.lastID = string(value)
+		}
+	case "retry":
+		if millis, parseErr := strconv.ParseInt(string(value), 10, 64); parseErr == nil && millis >= 0 {
+			p.retry = time.Duration(millis) * time.Millisecond
+		}
+	}
 }
 
 func (p *Parser) dispatch() (Event, bool, error) {
@@ -261,6 +272,8 @@ var knownTypes = map[string]struct{}{
 	"response.output_item.done":              {},
 	"response.output_text.delta":             {},
 	"response.output_text.done":              {},
+	"response.refusal.delta":                 {},
+	"response.refusal.done":                  {},
 	"response.reasoning_summary_part.added":  {},
 	"response.reasoning_summary_part.done":   {},
 	"response.reasoning_summary_text.delta":  {},

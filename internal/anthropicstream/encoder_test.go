@@ -96,6 +96,104 @@ func TestEncoderStopSequenceAcrossTextDeltas(t *testing.T) {
 	assertFrameOrder(t, text, "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop")
 }
 
+func TestEncoderStopMatchAlignsDroppedBlocksWithApplyStops(t *testing.T) {
+	stops := []string{"END"}
+	usage := reducer.Usage{InputTokens: 3, OutputTokens: 4}
+
+	t.Run("later open tool is dropped", func(t *testing.T) {
+		events := []reducer.Event{
+			{Kind: reducer.KindContentStart, Index: 0, Block: reducer.ContentBlock{Type: reducer.BlockText}},
+			{Kind: reducer.KindContentStart, Index: 1, Block: reducer.ContentBlock{Type: reducer.BlockToolUse, ID: "late", Name: "lookup"}},
+			{Kind: reducer.KindContentDelta, Index: 1, Delta: reducer.Delta{Type: reducer.DeltaInputJSON, Text: `{"q":1}`}},
+			{Kind: reducer.KindContentDelta, Index: 0, Delta: reducer.Delta{Type: reducer.DeltaText, Text: "hello END extra"}},
+			{Kind: reducer.KindContentStop, Index: 0},
+			{Kind: reducer.KindContentStop, Index: 1},
+			{Kind: reducer.KindTerminal, Terminal: &reducer.Terminal{StopReason: reducer.StopToolUse, Usage: usage}},
+		}
+		stream, truncated, body := encodeAndBuffer(t, stops, events, reducer.Result{
+			Content: []reducer.ContentBlock{
+				{Type: reducer.BlockText, Text: "hello END extra"},
+				{Type: reducer.BlockToolUse, ID: "late", Name: "lookup", Input: json.RawMessage(`{"q":1}`)},
+			},
+			StopReason: reducer.StopToolUse,
+			Usage:      usage,
+		})
+		if truncated.StopReason != reducer.StopStopSequence || truncated.StopSequence != "END" || len(truncated.Content) != 1 || truncated.Content[0].Text != "hello " {
+			t.Fatalf("ApplyStops = %#v", truncated)
+		}
+		if strings.Contains(string(body), `"id":"late"`) {
+			t.Fatalf("buffered kept dropped tool: %s", body)
+		}
+		if !strings.Contains(stream, `"text":"hello "`) || !strings.Contains(stream, `"stop_reason":"stop_sequence","stop_sequence":"END"`) {
+			t.Fatalf("stream = %s", stream)
+		}
+		if strings.Contains(stream, frame("content_block_stop", `{"type":"content_block_stop","index":1}`)) {
+			t.Fatalf("stream emitted content_block_stop for dropped tool: %s", stream)
+		}
+		if !strings.Contains(stream, frame("content_block_stop", `{"type":"content_block_stop","index":0}`)) {
+			t.Fatalf("stream missing matching text stop: %s", stream)
+		}
+	})
+
+	t.Run("earlier open tool is kept", func(t *testing.T) {
+		events := []reducer.Event{
+			{Kind: reducer.KindContentStart, Index: 0, Block: reducer.ContentBlock{Type: reducer.BlockToolUse, ID: "early", Name: "lookup"}},
+			{Kind: reducer.KindContentDelta, Index: 0, Delta: reducer.Delta{Type: reducer.DeltaInputJSON, Text: `{"q":1}`}},
+			{Kind: reducer.KindContentStart, Index: 1, Block: reducer.ContentBlock{Type: reducer.BlockText}},
+			{Kind: reducer.KindContentDelta, Index: 1, Delta: reducer.Delta{Type: reducer.DeltaText, Text: "hello END extra"}},
+			{Kind: reducer.KindContentStop, Index: 1},
+			{Kind: reducer.KindContentStop, Index: 0},
+			{Kind: reducer.KindTerminal, Terminal: &reducer.Terminal{StopReason: reducer.StopToolUse, Usage: usage}},
+		}
+		stream, truncated, body := encodeAndBuffer(t, stops, events, reducer.Result{
+			Content: []reducer.ContentBlock{
+				{Type: reducer.BlockToolUse, ID: "early", Name: "lookup", Input: json.RawMessage(`{"q":1}`)},
+				{Type: reducer.BlockText, Text: "hello END extra"},
+			},
+			StopReason: reducer.StopToolUse,
+			Usage:      usage,
+		})
+		if truncated.StopReason != reducer.StopStopSequence || len(truncated.Content) != 2 || truncated.Content[1].Text != "hello " {
+			t.Fatalf("ApplyStops = %#v", truncated)
+		}
+		if !strings.Contains(string(body), `"id":"early"`) || !strings.Contains(string(body), `"text":"hello "`) {
+			t.Fatalf("buffered dropped earlier tool: %s", body)
+		}
+		if !strings.Contains(stream, frame("content_block_stop", `{"type":"content_block_stop","index":0}`)) {
+			t.Fatalf("stream missing earlier tool stop: %s", stream)
+		}
+		if !strings.Contains(stream, `"stop_reason":"stop_sequence","stop_sequence":"END"`) {
+			t.Fatalf("stream = %s", stream)
+		}
+	})
+}
+
+func encodeAndBuffer(t *testing.T, stops []string, events []reducer.Event, result reducer.Result) (string, reducer.Result, []byte) {
+	t.Helper()
+	var output bytes.Buffer
+	encoder, err := New(&output, Options{MessageID: "m", Model: "gpt", StopSequences: stops})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			t.Fatalf("Encode(%#v): %v", event, err)
+		}
+	}
+	if encoder.MatchedStop() != "END" {
+		t.Fatalf("MatchedStop = %q", encoder.MatchedStop())
+	}
+	truncated, _, err := ApplyStops(result, stops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := MarshalBuffered("m", "gpt", truncated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output.String(), truncated, body
+}
+
 func TestEncoderFlushesUnmatchedStopPrefixBeforeBlockStop(t *testing.T) {
 	var output bytes.Buffer
 	encoder, err := New(&output, Options{MessageID: "m", Model: "gpt", StopSequences: []string{"STOP"}})

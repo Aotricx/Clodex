@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -760,6 +761,92 @@ func TestCoordinatorRejectsInvalidConfigurationAndHonorsCanceledContext(t *testi
 	}
 	if _, err := coordinator.Do(context.Background(), nil); err == nil {
 		t.Fatal("Do() with nil attempt error = nil")
+	}
+}
+
+func TestCoordinatorEnsureSkipsRefreshWhenDiskRotatedUnderLock(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
+	path, initial := writeRefreshAuth(t, now, now.Add(-9*24*time.Hour))
+	winner := initial.clone()
+	winner.Tokens.AccessToken = syntheticJWT(t, map[string]any{"exp": now.Add(time.Hour).Unix(), "winner": true})
+	winner.LastRefresh = now
+
+	held, err := lockAuth(context.Background(), path)
+	if err != nil {
+		t.Fatalf("hold auth lock: %v", err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = held.Unlock()
+		}
+	}()
+
+	var calls atomic.Int64
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeOAuthTokens(t, w, oauth.TokenSet{
+			AccessToken: syntheticJWT(t, map[string]any{"exp": now.Add(time.Hour).Unix(), "authority": true}),
+		})
+	}))
+	defer issuer.Close()
+
+	coordinator := &Coordinator{
+		Store: &Store{Path: path},
+		OAuth: &oauth.Client{Issuer: issuer.URL, HTTPClient: issuer.Client()},
+		Now:   func() time.Time { return now },
+	}
+
+	type outcome struct {
+		credentials Credentials
+		err         error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		credentials, err := coordinator.Ensure(context.Background())
+		done <- outcome{credentials: credentials, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("Ensure() completed while lock held: %v", got.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("authority calls = %d while lock held, want 0", calls.Load())
+	}
+
+	writeFileValue(t, path, winner)
+	if err := held.Unlock(); err != nil {
+		t.Fatalf("release auth lock: %v", err)
+	}
+	locked = false
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Ensure() error = %v", got.err)
+		}
+		if got.credentials.AccessToken() != winner.Tokens.AccessToken {
+			t.Fatal("Ensure() did not return disk winner after lock")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Ensure() remained blocked after lock release")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("authority calls = %d, want 0", calls.Load())
+	}
+
+	info, err := os.Stat(path + ".lock")
+	if err != nil {
+		t.Fatalf("stat lock file: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("lock file mode = %04o, want 0600", got)
+		}
 	}
 }
 

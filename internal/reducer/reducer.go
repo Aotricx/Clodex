@@ -64,7 +64,10 @@ func New() *Reducer {
 }
 
 func (r *Reducer) Push(upstream codexstream.Event) ([]Event, error) {
-	if r.terminal != nil || r.finalErr != nil {
+	if r.finalErr != nil {
+		return nil, r.finalErr
+	}
+	if r.terminal != nil {
 		if upstream.Terminal() {
 			return r.duplicateTerminal(upstream)
 		}
@@ -705,10 +708,17 @@ func (r *Reducer) finish(upstream codexstream.Event) ([]Event, error) {
 		r.finalErr = ErrEmptyCompletion
 		return events, r.finalErr
 	}
-	usage, err := parseUsage(response.Usage)
-	if err != nil {
-		r.finalErr = err
-		return events, err
+	var usage Usage
+	if usagePresent(response.Usage) {
+		parsed, parseErr := parseUsage(response.Usage)
+		if parseErr != nil {
+			r.finalErr = parseErr
+			return events, parseErr
+		}
+		usage = parsed
+	} else if upstream.Type != "response.incomplete" {
+		r.finalErr = ErrMissingUsage
+		return events, r.finalErr
 	}
 	stop := StopEndTurn
 	if upstream.Type == "response.incomplete" {
@@ -724,9 +734,12 @@ func (r *Reducer) finish(upstream codexstream.Event) ([]Event, error) {
 	return events, nil
 }
 
+func usagePresent(source *terminalUsage) bool {
+	return source != nil && source.InputTokens != nil && source.OutputTokens != nil
+}
+
 func parseUsage(source *terminalUsage) (Usage, error) {
-	if source == nil || source.InputTokens == nil || source.OutputTokens == nil ||
-		*source.InputTokens < 0 || *source.OutputTokens < 0 {
+	if !usagePresent(source) || *source.InputTokens < 0 || *source.OutputTokens < 0 {
 		return Usage{}, ErrMissingUsage
 	}
 	usage := Usage{InputTokens: *source.InputTokens, OutputTokens: *source.OutputTokens}
