@@ -271,7 +271,7 @@ func (t *translator) webSearchTool(tool anthropic.Tool) codexwire.Tool {
 			result.SearchContentTypes = types
 		}
 	}
-	known := stringSet("type", "name", "external_web_access", "allowed_domains", "search_content_types", "cache_control")
+	known := stringSet("type", "name", "external_web_access", "allowed_domains", "search_content_types")
 	keys := sortedKeys(object)
 	for _, key := range keys {
 		if _, ok := known[key]; !ok {

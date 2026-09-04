@@ -26,9 +26,13 @@ const (
 	discoveryProductVersion = "0.1.0"
 	maxCatalogResponseBytes = 16 << 20
 	maxCatalogErrorBytes    = 64 << 10
+
+	// HTTPTimeout is the live catalog Fetch deadline. Spawned `clodex serve`
+	// runs this Fetch before it binds, so launcher ready-wait must exceed it.
+	HTTPTimeout = 10 * time.Second
 )
 
-var defaultDiscoveryHTTPClient = &http.Client{Timeout: 10 * time.Second}
+var defaultDiscoveryHTTPClient = &http.Client{Timeout: HTTPTimeout}
 
 // DiscoveryHTTPError is one non-success response from the concrete ChatGPT
 // Codex model-catalog endpoint.

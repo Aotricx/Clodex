@@ -346,6 +346,99 @@ func TestOverlongRetryAfterReturnsEngineErrorNotBareError(t *testing.T) {
 	}
 }
 
+func TestCanceledHalfOpenProbeDoesNotStick(t *testing.T) {
+	clock := newTestClock(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: time.Hour,
+		Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+	}, clock, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.Failed(true)
+	clock.advance(time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	engine := &Engine{
+		Transport: &cancelingTransport{cancel: cancel},
+		Retry:     controller,
+		Wait:      func(context.Context, int, string) error { return nil },
+	}
+	_, runErr := engine.Run(ctx, testRequest(false), StreamHooks{})
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", runErr)
+	}
+
+	clock.advance(time.Minute)
+	if allowErr := controller.Allow(); allowErr != nil {
+		t.Fatalf("Allow after canceled half-open probe and cooldown = %v (probe stuck until restart)", allowErr)
+	}
+}
+
+func TestEmptyCompletionExhaustionReleasesHalfOpenProbe(t *testing.T) {
+	clock := newTestClock(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: time.Hour,
+		Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+	}, clock, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.Failed(true)
+	clock.advance(time.Minute)
+
+	empty := 0
+	engine := &Engine{
+		Transport:       &scriptedTransport{fallback: reply{status: 200, body: fixtureBytes(t, "regression_terminal_only_completed.sse")}},
+		Retry:           controller,
+		MaxEmptyRetries: &empty,
+		Wait:            func(context.Context, int, string) error { return nil },
+	}
+	_, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	var apiError *Error
+	if !errors.As(runErr, &apiError) || apiError.Failure.Message != "Codex completed without producing output" {
+		t.Fatalf("Run error = %v, want empty-completion exhaustion", runErr)
+	}
+
+	clock.advance(time.Minute)
+	if allowErr := controller.Allow(); allowErr != nil {
+		t.Fatalf("Allow after empty-completion exhaustion on half-open probe = %v (probe stuck until restart)", allowErr)
+	}
+}
+
+func TestOverlongRetryAfterReleasesHalfOpenProbe(t *testing.T) {
+	clock := newTestClock(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: 5 * time.Minute,
+		Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+	}, clock, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.Failed(true)
+	clock.advance(time.Minute)
+
+	engine := &Engine{
+		Transport: &scriptedTransport{fallback: reply{
+			status:  429,
+			headers: http.Header{"Retry-After": {"3600"}},
+			body:    []byte(`{"error":{"message":"rate limited"}}`),
+		}},
+		Retry: controller,
+		Wait:  func(context.Context, int, string) error { return nil },
+	}
+	_, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	var apiError *Error
+	if !errors.As(runErr, &apiError) || apiError.Failure.RetryAfter != "3600" {
+		t.Fatalf("Run error = %v, want overlong Retry-After engine error", runErr)
+	}
+
+	clock.advance(time.Minute)
+	if allowErr := controller.Allow(); allowErr != nil {
+		t.Fatalf("Allow after overlong Retry-After on half-open probe = %v (probe stuck until restart)", allowErr)
+	}
+}
+
 func TestEmptyCompletionRetryHoldsHalfOpenProbe(t *testing.T) {
 	clock := newTestClock(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
 	controller, err := retry.New(retry.Config{
@@ -466,6 +559,19 @@ func TestConsumeIgnoresTrailingEventsAfterTerminal(t *testing.T) {
 		}
 		if result.Response.Content[0].Text != "ok" {
 			t.Fatalf("content = %#v", result.Response.Content)
+		}
+	})
+
+	t.Run("truncated trailing frame", func(t *testing.T) {
+		truncated := []byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\"")
+		transport := &scriptedTransport{fallback: reply{status: 200, body: concatSSE(successText("ok"), truncated)}}
+		engine := newTestEngine(t, transport)
+		result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+		if err != nil {
+			t.Fatalf("Run error = %v, want success after trailing parser error", err)
+		}
+		if result.Response.Content[0].Text != "ok" || transport.Attempts() != 1 {
+			t.Fatalf("result=%#v attempts=%d", result, transport.Attempts())
 		}
 	})
 }
@@ -644,6 +750,15 @@ func (clock *testClock) advance(delay time.Duration) {
 	clock.mu.Lock()
 	clock.now = clock.now.Add(delay)
 	clock.mu.Unlock()
+}
+
+type cancelingTransport struct {
+	cancel context.CancelFunc
+}
+
+func (transport *cancelingTransport) Stream(context.Context, upstream.Session, codexwire.Request) (*http.Response, error) {
+	transport.cancel()
+	return nil, io.ErrUnexpectedEOF
 }
 
 type diagnosticRecord struct {

@@ -23,9 +23,14 @@ const (
 	// custom-base mode; Clodex authenticates separately with Codex credentials.
 	DummyAuthToken = "clodex-loopback-dummy"
 
-	defaultReadyTimeout  = 10 * time.Second
+	// catalogReadySlack covers tokenizer/handler construction after a
+	// worst-case live catalog Fetch (catalog.HTTPTimeout) so spawned serve
+	// can fall back and bind instead of being SIGKILL'd at the Fetch deadline.
+	catalogReadySlack    = 15 * time.Second
 	defaultProbeInterval = 50 * time.Millisecond
 )
+
+var defaultReadyTimeout = catalog.HTTPTimeout + catalogReadySlack
 
 var claudeEnvironmentKeys = []string{
 	"ANTHROPIC_BASE_URL",

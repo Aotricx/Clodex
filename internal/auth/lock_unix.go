@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
 
+// acquireExclusiveLock polls LOCK_EX|LOCK_NB so a canceled waiter can return
+// without Close()ing a file descriptor that another goroutine has blocked in
+// Flock. Darwin close(2) waits for that flock to finish.
 func acquireExclusiveLock(ctx context.Context, lockPath string) (*authLock, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
@@ -18,21 +22,25 @@ func acquireExclusiveLock(ctx context.Context, lockPath string) (*authLock, erro
 		return nil, err
 	}
 
-	locked := make(chan error, 1)
-	go func() {
-		locked <- syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
-	}()
-	select {
-	case <-ctx.Done():
-		_ = file.Close()
-		<-locked
-		return nil, ctx.Err()
-	case err := <-locked:
-		if err != nil {
+	for {
+		if err := contextError(ctx); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return &authLock{file: file}, nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 			_ = file.Close()
 			return nil, fmt.Errorf("lock auth: %w", err)
 		}
-		return &authLock{file: file}, nil
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }
 

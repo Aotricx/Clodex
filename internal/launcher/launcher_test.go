@@ -362,6 +362,16 @@ func TestRunSpawnsCurrentExecutableAndWaitsForReadiness(t *testing.T) {
 	}
 }
 
+func TestDefaultReadyTimeoutExceedsCatalogDiscoveryTimeout(t *testing.T) {
+	t.Parallel()
+	// Spawned `clodex serve` fetches the catalog before it binds, so the
+	// launcher must wait longer than that Fetch or it SIGKILLs a child that
+	// would have fallen back and become healthy a moment later.
+	if defaultReadyTimeout <= catalog.HTTPTimeout {
+		t.Fatalf("defaultReadyTimeout = %s, want greater than catalog.HTTPTimeout (%s)", defaultReadyTimeout, catalog.HTTPTimeout)
+	}
+}
+
 func TestRunKillsAndWaitsForFailedProxyStart(t *testing.T) {
 	t.Parallel()
 

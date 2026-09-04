@@ -119,7 +119,7 @@ func decodeRequest(r io.Reader, requireMaxTokens bool) (*MessageRequest, error) 
 		}
 		req.StopSequences = make([]string, len(elements))
 		for i, element := range elements {
-			if isNull(element) || json.Unmarshal(element, &req.StopSequences[i]) != nil {
+			if isNull(element) || json.Unmarshal(element, &req.StopSequences[i]) != nil || req.StopSequences[i] == "" {
 				return nil, invalidRequest("stop_sequences must be an array of strings")
 			}
 		}

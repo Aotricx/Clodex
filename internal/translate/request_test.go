@@ -369,6 +369,17 @@ func TestTranslateRequestMalformedWebSearchServerToolUseStaysUnknown(t *testing.
 	}
 }
 
+func TestTranslateRequestWebSearchCacheControlIsWarned(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"go"}],
+		"tools":[{"type":"web_search_20250305","name":"web_search","cache_control":{"type":"ephemeral"}}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	if warningCount(result.Warnings, WarningWebSearchUnmappableField) != 1 {
+		t.Fatalf("warnings = %#v, want cache_control warned as unmappable", result.Warnings)
+	}
+}
+
 func TestTranslateRequestWebSearchToolInvalidFieldsAreWarnedNotInvented(t *testing.T) {
 	req := decodeRequest(t, `{
 		"model":"m","max_tokens":1,"messages":[{"role":"user","content":"go"}],

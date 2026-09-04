@@ -150,6 +150,12 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 	attempts := 0
 	runStart := engine.now()
 	holdingAttempt := false
+	settled := false
+	defer func() {
+		if holdingAttempt && !settled {
+			engine.Retry.Failed(true)
+		}
+	}()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -174,10 +180,12 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			var authenticationError *upstream.AuthenticationError
 			if errors.As(transportErr, &authenticationError) {
 				engine.Retry.Failed(false)
+				settled = true
 				return Result{}, apiError(http.StatusUnauthorized, "authentication_error", authenticationError.Error(), "", false)
 			}
 			if transientRetriesUsed >= maxTransientRetries {
 				engine.Retry.Failed(true)
+				settled = true
 				return Result{}, networkError(transportErr)
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryNetwork, Attempt: attempts, Event: redactedMessage(transportErr.Error())})
@@ -198,6 +206,8 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			if !effortFloored && unsupportedEffort(mapped) && request.FloorEffort != nil {
 				floored, ok, floorErr := request.FloorEffort(current)
 				if floorErr != nil {
+					engine.Retry.Failed(false)
+					settled = true
 					return Result{}, floorErr
 				}
 				if ok {
@@ -213,6 +223,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			if !mapped.Retryable || transientRetriesUsed >= maxTransientRetries {
 				engine.Retry.Failed(mapped.Retryable)
+				settled = true
 				return Result{}, &Error{Failure: mapped}
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryHTTP, Attempt: attempts})
@@ -227,6 +238,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 		attempt, err := engine.consume(ctx, request.Streaming, response, hooks, engine.now().Sub(streamStart))
 		if err == nil {
 			engine.Retry.Succeeded()
+			settled = true
 			attempt.result.Attempts = attempts
 			attempt.result.EffortFloorCount = effortFloorCount
 			attempt.result.Timing.Total = engine.now().Sub(runStart)
@@ -240,11 +252,14 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			var committedError *Error
 			if errors.As(err, &committedError) {
 				engine.Retry.Failed(committedError.Failure.Retryable)
+				settled = true
 			}
 			return Result{}, err
 		}
 		if errors.Is(err, reducer.ErrEmptyCompletion) {
 			if emptyRetriesUsed >= maxEmptyRetries {
+				engine.Retry.Failed(false)
+				settled = true
 				return Result{}, emptyCompletionError()
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryEmptyCompletion, Attempt: attempts, Event: attempt.retryEvent})
@@ -266,6 +281,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 		}
 		if errors.As(err, &apiError) {
 			engine.Retry.Failed(apiError.Failure.Retryable)
+			settled = true
 		}
 		return Result{}, err
 	}
@@ -336,7 +352,10 @@ func (engine *Engine) consume(ctx context.Context, streaming bool, response *htt
 	for {
 		upstreamEvent, err := parser.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) && final != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return attemptResult{committed: committed}, ctxErr
+			}
+			if final != nil {
 				timing := Timing{TransportWait: transportWait}
 				if !firstEventAt.IsZero() {
 					timing.FirstEvent = firstEventAt.Sub(headersAt)
@@ -345,9 +364,6 @@ func (engine *Engine) consume(ctx context.Context, streaming bool, response *htt
 					timing.Commit = commitAt.Sub(headersAt)
 				}
 				return attemptResult{result: Result{Response: *final, Events: allEvents, Headers: headers, Timing: timing}, committed: committed}, nil
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return attemptResult{committed: committed}, ctxErr
 			}
 			return attemptResult{committed: committed, retryEvent: retryEvent}, networkError(err)
 		}
@@ -439,6 +455,9 @@ func semanticEvents(events []reducer.Event) bool {
 func (engine *Engine) prepareRetry(ctx context.Context, attempt int, retryAfter string, failureEvent bool) error {
 	if retryAfter != "" {
 		if _, err := engine.Retry.Delay(attempt, retryAfter); err != nil {
+			if failureEvent {
+				engine.Retry.Failed(true)
+			}
 			return wrapWaitError(err, retryAfter)
 		}
 	}

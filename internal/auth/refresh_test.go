@@ -850,6 +850,29 @@ func TestCoordinatorEnsureSkipsRefreshWhenDiskRotatedUnderLock(t *testing.T) {
 	}
 }
 
+func TestAuthLockWaitHonorsContextDeadlineWhileHeld(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "auth.json")
+	held, err := lockAuth(context.Background(), path)
+	if err != nil {
+		t.Fatalf("hold auth lock: %v", err)
+	}
+	defer func() { _ = held.Unlock() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = lockAuth(ctx, path)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lockAuth = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("lockAuth waited %v with a blocked peer; cancel must not wait on flock", elapsed)
+	}
+}
+
 func writeRefreshAuth(t testing.TB, now, lastRefresh time.Time) (string, *File) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "auth.json")

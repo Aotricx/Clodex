@@ -327,6 +327,8 @@ func TestDecodeRequestRejectsNullAndNonStringStopSequenceElements(t *testing.T) 
 		{"null element", `[null]`},
 		{"string then null", `["END", null]`},
 		{"number element", `[1]`},
+		{"empty string", `[""]`},
+		{"string then empty", `["END", ""]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			decodeInvalid(t, `{`+valid+`,"stop_sequences":`+tc.stops+`}`)
