@@ -16,10 +16,35 @@ binary, no runtime dependencies.
 Anthropic-to-Codex translation, streaming, and failure-handling behavior was adapted from
 [raine/claude-code-proxy](https://github.com/raine/claude-code-proxy) (MIT, © Raine Virta).
 
-**Contents:** [Before you use this](#before-you-use-this) ·
+**Contents:** [Why Clodex](#why-clodex-over-other-solutions) · [Before you use this](#before-you-use-this) ·
 [How it works](#how-it-works) · [Quick start](#quick-start) · [Commands](#commands) ·
 [Models](#models) · [Configuration](#configuration) · [Endpoints](#endpoints) ·
 [Troubleshooting](#troubleshooting) · [Limitations](#limitations) · [Security](#security)
+
+## Why Clodex over other solutions?
+
+Most Claude Code proxies are multi-provider: one binary that claims to route to OpenAI, Gemini,
+DeepSeek, local models, and everything else. Breadth like that has a cost. Each backend gets a
+thin adapter, edge cases get handled for whichever provider the author uses most, and the rest
+"mostly works" — tool calls that drop arguments mid-stream, usage counts that are guesses, cache
+and context windows that are wrong, errors that get swallowed into a generic 500. You find out
+which parts are broken by hitting them in the middle of a real session.
+
+Clodex does one thing: run Codex models inside Claude Code, correctly. One backend, one protocol
+(the pinned Codex CLI wire format), one auth path. Every Claude Code behavior that matters —
+streaming, tool-call and tool-result round-trips, thinking/reasoning, stop sequences,
+auto-compaction sizing, real token usage, real rate-limit and error propagation — is translated
+end to end and checked against the real backend, not approximated. When Claude Code does
+something, the Codex model sees it; when the backend answers, Claude Code gets the exact
+Anthropic-shaped equivalent, on both the streaming and buffered paths.
+
+The trade-off is deliberate. Clodex is not a jack of all trades — it will never add a second
+provider, an API-key mode, or a model it can't fully verify. It is meant to be the one adapter you
+don't have to think about. If you want many models with rough edges, another proxy will serve you
+better; if you want Codex in Claude Code to behave like it belongs there, this is the tool.
+
+See [`docs/EVIDENCE.md`](docs/EVIDENCE.md) for what has been demonstrated end to end, and
+[Limitations](#limitations) for what has not.
 
 ## Before you use this
 
