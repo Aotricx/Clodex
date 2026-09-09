@@ -442,6 +442,43 @@ func TestManagerCanceledWaiterLeavesSharedRefreshRunning(t *testing.T) {
 	}
 }
 
+func TestDiscoveryDoesNotFollowRedirects(t *testing.T) {
+	now := time.Date(2026, 7, 21, 18, 0, 0, 123, time.UTC)
+	coordinator, _ := discoveryAuth(t, now, "account-test", nil)
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var mu sync.Mutex
+			destHits := 0
+			dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				destHits++
+				mu.Unlock()
+				t.Errorf("followed redirect to %s with Authorization %q", r.URL.Path, r.Header.Get("Authorization"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, liveModelsJSON("hijacked"))
+			}))
+			t.Cleanup(dest.Close)
+			src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, dest.URL+"/models", status)
+			}))
+			t.Cleanup(src.Close)
+
+			client := &DiscoveryClient{Auth: coordinator, Endpoint: src.URL + "/models", Now: func() time.Time { return now }}
+			_, err := client.Fetch(context.Background())
+			var httpErr *DiscoveryHTTPError
+			if !errors.As(err, &httpErr) || httpErr.StatusCode != status {
+				t.Fatalf("Fetch error = %v, want DiscoveryHTTPError %d", err, status)
+			}
+			mu.Lock()
+			hits := destHits
+			mu.Unlock()
+			if hits != 0 {
+				t.Fatalf("destination hits = %d, want 0 (Authorization must not follow redirects)", hits)
+			}
+		})
+	}
+}
+
 func liveManager(t *testing.T, now time.Time, cachePath string, status int, body string) (*Manager, *atomic.Int64, func()) {
 	t.Helper()
 	coordinator, _ := discoveryAuth(t, now, "account-test", nil)

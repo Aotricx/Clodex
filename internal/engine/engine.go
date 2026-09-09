@@ -163,11 +163,16 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 		}
 		return ctx.Err()
 	}
-	settlePrepareRetry := func(err error) error {
+	settlePrepareRetry := func(err error, releaseHalfOpen bool) error {
 		if ctx.Err() != nil {
 			return settleCancel()
 		}
-		settled = true
+		if !settled {
+			if releaseHalfOpen {
+				engine.Retry.Failed(false)
+			}
+			settled = true
+		}
 		return err
 	}
 
@@ -204,7 +209,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryNetwork, Attempt: attempts, Event: redactedMessage(transportErr.Error())})
 			if err := engine.prepareRetry(ctx, transientRetriesUsed+1, "", true); err != nil {
-				return Result{}, settlePrepareRetry(err)
+				return Result{}, settlePrepareRetry(err, false)
 			}
 			holdingAttempt = false
 			transientRetriesUsed++
@@ -214,7 +219,21 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			body, readErr := readAndClose(response.Body)
 			if readErr != nil {
-				return Result{}, networkError(readErr)
+				if ctx.Err() != nil {
+					return Result{}, settleCancel()
+				}
+				if transientRetriesUsed >= maxTransientRetries {
+					engine.Retry.Failed(true)
+					settled = true
+					return Result{}, networkError(readErr)
+				}
+				engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryNetwork, Attempt: attempts, Event: redactedMessage(readErr.Error())})
+				if err := engine.prepareRetry(ctx, transientRetriesUsed+1, "", true); err != nil {
+					return Result{}, settlePrepareRetry(err, false)
+				}
+				holdingAttempt = false
+				transientRetriesUsed++
+				continue
 			}
 			mapped := failure.FromHTTP(response.StatusCode, body, response.Header)
 			if !effortFloored && unsupportedEffort(mapped) && request.FloorEffort != nil {
@@ -227,7 +246,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 				if ok {
 					engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryEffortFloor, Attempt: attempts})
 					if err := engine.prepareRetry(ctx, 1, "", false); err != nil {
-						return Result{}, settlePrepareRetry(err)
+						return Result{}, settlePrepareRetry(err, true)
 					}
 					current = floored
 					effortFloored = true
@@ -242,7 +261,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryHTTP, Attempt: attempts})
 			if err := engine.prepareRetry(ctx, transientRetriesUsed+1, mapped.RetryAfter, true); err != nil {
-				return Result{}, settlePrepareRetry(err)
+				return Result{}, settlePrepareRetry(err, false)
 			}
 			holdingAttempt = false
 			transientRetriesUsed++
@@ -278,7 +297,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryEmptyCompletion, Attempt: attempts, Event: attempt.retryEvent})
 			if retryErr := engine.prepareRetry(ctx, emptyRetriesUsed+1, "", false); retryErr != nil {
-				return Result{}, settlePrepareRetry(retryErr)
+				return Result{}, settlePrepareRetry(retryErr, true)
 			}
 			emptyRetriesUsed++
 			continue
@@ -287,7 +306,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 		if errors.As(err, &apiError) && apiError.Failure.Retryable && transientRetriesUsed < maxTransientRetries {
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryStream, Attempt: attempts, Event: attempt.retryEvent})
 			if retryErr := engine.prepareRetry(ctx, transientRetriesUsed+1, apiError.Failure.RetryAfter, true); retryErr != nil {
-				return Result{}, settlePrepareRetry(retryErr)
+				return Result{}, settlePrepareRetry(retryErr, false)
 			}
 			holdingAttempt = false
 			transientRetriesUsed++
@@ -539,7 +558,10 @@ func readAndClose(body io.ReadCloser) ([]byte, error) {
 func failureFromStream(raw []byte) failure.Failure {
 	statusCode := http.StatusBadGateway
 	var envelope struct {
-		Status   int `json:"status"`
+		Status int `json:"status"`
+		Error  struct {
+			Status int `json:"status"`
+		} `json:"error"`
 		Response struct {
 			Error struct {
 				Status int `json:"status"`
@@ -549,6 +571,8 @@ func failureFromStream(raw []byte) failure.Failure {
 	if json.Unmarshal(raw, &envelope) == nil {
 		if envelope.Response.Error.Status != 0 {
 			statusCode = envelope.Response.Error.Status
+		} else if envelope.Error.Status != 0 {
+			statusCode = envelope.Error.Status
 		} else if envelope.Status != 0 {
 			statusCode = envelope.Status
 		}

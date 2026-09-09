@@ -126,8 +126,9 @@ func ensureProxy(ctx context.Context, healthURL string, environment []string, op
 		Path:               executable,
 		Args:               []string{"serve", "--port", strconv.Itoa(options.Port)},
 		Env:                append([]string(nil), environment...),
-		Stdout:             dependencies.Stdout,
-		Stderr:             dependencies.Stderr,
+		Stdin:              io.NopCloser(strings.NewReader("")),
+		Stdout:             io.Discard,
+		Stderr:             io.Discard,
 		DetachProcessGroup: true,
 	})
 	if err != nil {

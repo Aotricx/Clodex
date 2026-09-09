@@ -203,7 +203,7 @@ func requireCodexAuth(store *auth.Store) error {
 		return nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("clodex claude requires credentials in ~/.codex/auth.json; run clodex auth login or clodex auth device first: %w", err)
+		return fmt.Errorf("clodex claude requires credentials in %s; run clodex auth login or clodex auth device first: %w", store.Path, err)
 	}
 	return err
 }

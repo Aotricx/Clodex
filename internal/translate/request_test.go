@@ -324,6 +324,20 @@ func TestTranslateRequestStableCacheKeyFromCacheControl(t *testing.T) {
 	}
 }
 
+func TestTranslateRequestDocumentCacheControlEntersPromptCacheKey(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQ="},"title":"notes.pdf","cache_control":{"type":"ephemeral"}}]}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	if result.Request.PromptCacheKey == "" || !strings.HasPrefix(result.Request.PromptCacheKey, "clodex-cache-v1-") {
+		t.Fatalf("document cache_control prompt cache key = %q", result.Request.PromptCacheKey)
+	}
+	if result.Accounting.Mapped == 0 {
+		t.Fatalf("document cache_control accounting = %#v", result.Accounting)
+	}
+}
+
 func TestTranslateRequestUnknownSemanticItemsAreWarningAccounted(t *testing.T) {
 	req := decodeRequest(t, `{
 		"model":"m","max_tokens":1,"future_top":true,

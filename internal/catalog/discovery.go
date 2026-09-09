@@ -32,7 +32,12 @@ const (
 	HTTPTimeout = 10 * time.Second
 )
 
-var defaultDiscoveryHTTPClient = &http.Client{Timeout: HTTPTimeout}
+var defaultDiscoveryHTTPClient = &http.Client{
+	Timeout: HTTPTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // DiscoveryHTTPError is one non-success response from the concrete ChatGPT
 // Codex model-catalog endpoint.

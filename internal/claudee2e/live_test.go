@@ -198,7 +198,7 @@ func parseTranscript(output []byte) (transcriptFacts, error) {
 			modelUsage, _ := event["modelUsage"].(map[string]any)
 			for id, raw := range modelUsage {
 				entry, _ := raw.(map[string]any)
-				if strings.HasPrefix(id, "anthropic-clodex-") && integer(entry["contextWindow"]) == 1_000_000 {
+				if (strings.HasPrefix(id, "anthropic-clodex-") || strings.HasSuffix(id, "[1m]")) && integer(entry["contextWindow"]) == 1_000_000 {
 					facts.CarrierContextSeen = true
 				}
 			}

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"syscall"
-	"time"
 )
 
 // acquireExclusiveLock polls LOCK_EX|LOCK_NB so a canceled waiter can return
@@ -39,7 +38,11 @@ func acquireExclusiveLock(ctx context.Context, lockPath string) (*authLock, erro
 		case <-ctx.Done():
 			_ = file.Close()
 			return nil, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
+		default:
+			if err := waitLockRetry(ctx); err != nil {
+				_ = file.Close()
+				return nil, err
+			}
 		}
 	}
 }

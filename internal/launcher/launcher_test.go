@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -225,8 +226,8 @@ func TestRunReusesHealthyProxyAndBuildsClaudeEnvironment(t *testing.T) {
 		"KEEP":                            "present",
 		"ANTHROPIC_BASE_URL":              "http://127.0.0.1:8484",
 		"ANTHROPIC_AUTH_TOKEN":            DummyAuthToken,
-		"ANTHROPIC_MODEL":                 "anthropic-clodex-gpt-main:medium[1m]",
-		"ANTHROPIC_SMALL_FAST_MODEL":      "anthropic-clodex-gpt-small:low[1m]",
+		"ANTHROPIC_MODEL":                 "gpt-main:medium[1m]",
+		"ANTHROPIC_SMALL_FAST_MODEL":      "gpt-small:low[1m]",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "272000",
 		"HTTP_PROXY":                      "http://proxy.example:8080",
 	})
@@ -295,8 +296,8 @@ func TestRunUsesCatalogFallbackContextForConfiguredAndUnknownModels(t *testing.T
 				t.Fatalf("Run() error = %v", err)
 			}
 			assertEnv(t, command.Env, map[string]string{
-				"ANTHROPIC_MODEL":                 model.ClaudeCarrierID(test.wantModel),
-				"ANTHROPIC_SMALL_FAST_MODEL":      model.ClaudeCarrierID(test.wantSmall),
+				"ANTHROPIC_MODEL":                 model.ClaudeCodeID(test.wantModel),
+				"ANTHROPIC_SMALL_FAST_MODEL":      model.ClaudeCodeID(test.wantSmall),
 				"CLAUDE_CODE_AUTO_COMPACT_WINDOW": test.wantContext,
 			})
 		})
@@ -381,6 +382,49 @@ func TestRunSpawnsCurrentExecutableAndWaitsForReadiness(t *testing.T) {
 	}
 	if proxy.killed.Load() {
 		t.Fatal("healthy spawned proxy was killed")
+	}
+}
+
+func TestRunSpawnedProxyDoesNotInheritParentStdio(t *testing.T) {
+	t.Parallel()
+
+	parentOut := &bytes.Buffer{}
+	parentErr := &bytes.Buffer{}
+	parentIn := strings.NewReader("parent-stdin")
+	var commands []Command
+	options := testOptions(9754)
+	options.Dependencies = testDependencies()
+	options.Dependencies.Stdin = parentIn
+	options.Dependencies.Stdout = parentOut
+	options.Dependencies.Stderr = parentErr
+	options.Dependencies.Probe = func(context.Context, string) (Health, error) {
+		if len(commands) == 0 {
+			return Health{}, ErrProxyUnavailable
+		}
+		return healthy(), nil
+	}
+	options.Dependencies.Spawn = func(_ context.Context, command Command) (Process, error) {
+		commands = append(commands, command)
+		process := newProcessStub()
+		if len(commands) == 1 {
+			return process, nil
+		}
+		process.complete(nil)
+		return process, nil
+	}
+
+	if err := Run(context.Background(), []string{"--", "--print"}, options); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands = %d, want proxy and Claude", len(commands))
+	}
+	proxy, claude := commands[0], commands[1]
+	if proxy.Stdout == parentOut || proxy.Stderr == parentErr || proxy.Stdin == parentIn {
+		t.Fatalf("proxy inherited parent stdio: stdin=%T stdout=%T stderr=%T", proxy.Stdin, proxy.Stdout, proxy.Stderr)
+	}
+	if claude.Stdin != parentIn || claude.Stdout != parentOut || claude.Stderr != parentErr {
+		t.Fatalf("claude stdio = stdin=%T stdout=%T stderr=%T, want parent streams", claude.Stdin, claude.Stdout, claude.Stderr)
 	}
 }
 
@@ -574,8 +618,8 @@ func TestRunUsesShippingModelDefaults(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	assertEnv(t, command.Env, map[string]string{
-		"ANTHROPIC_MODEL":                 "anthropic-clodex-gpt-5.6-sol:medium[1m]",
-		"ANTHROPIC_SMALL_FAST_MODEL":      "anthropic-clodex-gpt-5.6-luna:low[1m]",
+		"ANTHROPIC_MODEL":                 "gpt-5.6-sol:medium[1m]",
+		"ANTHROPIC_SMALL_FAST_MODEL":      "gpt-5.6-luna:low[1m]",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "272000",
 	})
 }
@@ -663,7 +707,7 @@ func TestRunSubprocessPassThroughAndSpawnedHealth(t *testing.T) {
 	if !reflect.DeepEqual(capture.Args, []string{"-p", "task with spaces"}) {
 		t.Fatalf("Claude args = %#v", capture.Args)
 	}
-	if capture.Env["KEEP"] != "subprocess" || capture.Env["ANTHROPIC_MODEL"] != "anthropic-clodex-gpt-main:xhigh[1m]" ||
+	if capture.Env["KEEP"] != "subprocess" || capture.Env["ANTHROPIC_MODEL"] != "gpt-main:xhigh[1m]" ||
 		capture.Env["ANTHROPIC_BASE_URL"] != fmt.Sprintf("http://127.0.0.1:%d", port) ||
 		capture.Env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "272000" ||
 		capture.Env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "" {

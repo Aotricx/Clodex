@@ -442,6 +442,52 @@ func TestReducerSeparatesMultipleReasoningSummaryParts(t *testing.T) {
 	}
 }
 
+func TestReducerMergesLaterReasoningSummaryPartsAfterPartialStream(t *testing.T) {
+	r := New()
+	input := []codexstream.Event{
+		event(`{"type":"response.output_item.added","output_index":0,"item":{"id":"rs","type":"reasoning","encrypted_content":"opaque","summary":[]}}`),
+		event(`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"first"}`),
+		event(`{"type":"response.output_item.done","output_index":0,"item":{"id":"rs","type":"reasoning","encrypted_content":"opaque","summary":[{"type":"summary_text","text":"first"},{"type":"summary_text","text":"second"}]}}`),
+		event(completed(`{"id":"r","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`)),
+	}
+	for _, item := range input {
+		if _, err := r.Push(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := r.Result()
+	if err != nil || len(result.Content) != 1 || result.Content[0].Thinking != "first\n\nsecond" {
+		t.Fatalf("result = %#v, %v", result, err)
+	}
+}
+
+func TestReducerTreatsErrorEventAsUpstreamFailure(t *testing.T) {
+	r := New()
+	_, err := r.Push(event(`{"type":"error","error":{"status":400,"message":"standalone error event"}}`))
+	if !errors.Is(err, ErrUpstreamFailed) || !strings.Contains(err.Error(), "standalone error event") {
+		t.Fatalf("error event = %v, want upstream failure", err)
+	}
+}
+
+func TestReducerIgnoresTextDeltaAfterContentPartClosed(t *testing.T) {
+	r := New()
+	input := []codexstream.Event{
+		event(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"}`),
+		event(`{"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"ok"}}`),
+		event(`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"late"}`),
+		event(completed(`{"id":"r","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)),
+	}
+	for _, item := range input {
+		if _, err := r.Push(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := r.Result()
+	if err != nil || len(result.Content) != 1 || result.Content[0].Text != "ok" {
+		t.Fatalf("result = %#v, %v", result, err)
+	}
+}
+
 func TestReducerSeparatesBufferedReasoningSummaryParts(t *testing.T) {
 	r := New()
 	input := []codexstream.Event{

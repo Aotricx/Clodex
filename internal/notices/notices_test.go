@@ -37,6 +37,9 @@ func TestThirdPartyNoticesCanonicalAndComplete(t *testing.T) {
 		"github.com/dlclark/regexp2/v2",
 		"v2.5.1",
 		"0ec61737c1e8483bb16083a916fa9a3bd21f91bb",
+		"golang.org/x/image",
+		"v0.46.0",
+		"b06f1de3f4900ff828b8f114c37eb9ea10dfed90",
 	}
 	for _, marker := range required {
 		if !strings.Contains(embedded, marker) {
@@ -76,6 +79,7 @@ func TestThirdPartyNoticesCanonicalAndComplete(t *testing.T) {
 		"### OpenAI Codex license text":            "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
 		"### tiktoken-go license text":             "84b1679fd28b98c8e02f2f1a1cab41ac230b0e9841695462ad6369663d32473a",
 		"### regexp2 license text":                 "9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9",
+		"### golang.org/x/image license text":      "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
 	} {
 		license := fencedLicense(t, embedded, heading)
 		if got := fmt.Sprintf("%x", sha256.Sum256([]byte(license))); got != want {

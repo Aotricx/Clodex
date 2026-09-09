@@ -538,6 +538,9 @@ func TestTextRedactsBearersAndJWTsWithoutCorruptingBenignDots(t *testing.T) {
 		{"quoted structured plaintext", `{"api_key":"synthetic","message":"safe"}`, `{"api_key":"` + Marker + `","message":"safe"}`},
 		{"versions and IPs", "versions 1.2.3 and 10.20.30.40", "versions 1.2.3 and 10.20.30.40"},
 		{"ordinary dotted words", "alpha.beta.gamma package.name and bearer", "alpha.beta.gamma package.name and bearer"},
+		{"auth json path", "read auth: open /Users/hunter/.codex/auth.json: no such file", "read auth: open " + Marker + ": no such file"},
+		{"home auth json", "credentials in ~/.codex/auth.json first", "credentials in " + Marker + " first"},
+		{"models cache path", "open /var/tmp/models_cache.json: permission denied", "open " + Marker + ": permission denied"},
 		{"similarly named text", "token_count=12 authorization_mode=oauth api_key_hint=set client_secret_hint=set", "token_count=12 authorization_mode=oauth api_key_hint=set client_secret_hint=set"},
 		{"unicode", "Hello 世界", "Hello 世界"},
 	}

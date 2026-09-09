@@ -38,8 +38,11 @@ jobs:
             exit 1
           fi
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Test with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
 
   release:
     name: Build and publish static binaries

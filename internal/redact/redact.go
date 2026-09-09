@@ -22,6 +22,7 @@ var (
 	bearerPattern           = regexp.MustCompile(`(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/\-=]+`)
 	jwtPattern              = regexp.MustCompile(`[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 	apiKeyPattern           = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}`)
+	credentialPathPattern   = regexp.MustCompile(`(?i)(?:~[/\\]|\$HOME[/\\]|[A-Za-z]:[/\\]|[/\\.][/\\]|[/\\])[^\s"'<>]*(?:auth\.json|models_cache\.json)`)
 	textDoubleQuotedPattern = regexp.MustCompile(textSecretPrefix + `"[^"\r\n]*"`)
 	textSingleQuotedPattern = regexp.MustCompile(textSecretPrefix + `'[^'\r\n]*'`)
 	textBarePattern         = regexp.MustCompile(textSecretPrefix + `[^\s,;&"']+`)
@@ -163,6 +164,7 @@ func Text(source string) string {
 	redacted = textBarePattern.ReplaceAllString(redacted, "${1}${2}"+Marker)
 	redacted = bearerPattern.ReplaceAllString(redacted, "${1}"+Marker)
 	redacted = apiKeyPattern.ReplaceAllString(redacted, Marker)
+	redacted = credentialPathPattern.ReplaceAllString(redacted, Marker)
 	return redactJWTs(redacted)
 }
 

@@ -243,6 +243,31 @@ func TestEngineMapsTerminalResponseFailedHonestly(t *testing.T) {
 	}
 }
 
+func TestEngineMapsStandaloneErrorSSEHonestly(t *testing.T) {
+	body := []byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"status\":400,\"message\":\"standalone error event\"}}\n\n")
+	transport := &scriptedTransport{fallback: reply{status: 200, body: body}}
+	engine := newTestEngine(t, transport)
+	_, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	var apiError *Error
+	if !errors.As(err, &apiError) || transport.Attempts() != 1 || apiError.Failure.StatusCode != 400 || apiError.Failure.Message != "standalone error event" {
+		t.Fatalf("error=%v attempts=%d", err, transport.Attempts())
+	}
+}
+
+func TestHTTPErrorBodyReadFailureUsesTransientRetries(t *testing.T) {
+	transport := &scriptedTransport{script: []reply{
+		{status: http.StatusServiceUnavailable, bodyReader: io.NopCloser(errReader{})},
+		{status: 200, body: successText("recovered")},
+	}}
+	engine := newTestEngine(t, transport)
+	transient := 1
+	engine.MaxTransientRetries = &transient
+	result, err := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	if err != nil || transport.Attempts() != 2 || result.Response.Content[0].Text != "recovered" {
+		t.Fatalf("result=%#v err=%v attempts=%d", result, err, transport.Attempts())
+	}
+}
+
 func TestStreamingDefersCommitUntilSemanticOutput(t *testing.T) {
 	transport := &scriptedTransport{fallback: reply{status: 200, body: successText("streamed")}}
 	engine := newTestEngine(t, transport)
@@ -403,6 +428,36 @@ func TestEmptyCompletionExhaustionReleasesHalfOpenProbe(t *testing.T) {
 	clock.advance(time.Minute)
 	if allowErr := controller.Allow(); allowErr != nil {
 		t.Fatalf("Allow after empty-completion exhaustion on half-open probe = %v (probe stuck until restart)", allowErr)
+	}
+}
+
+func TestEmptyCompletionBudgetExhaustionReleasesHalfOpenProbe(t *testing.T) {
+	clock := newTestClock(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))
+	controller, err := retry.New(retry.Config{
+		BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: time.Hour,
+		Budget: 1, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+	}, clock, func() float64 { return 0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.Failed(true)
+	clock.advance(time.Minute)
+
+	empty := 10
+	engine := &Engine{
+		Transport:       &scriptedTransport{fallback: reply{status: 200, body: fixtureBytes(t, "regression_terminal_only_completed.sse")}},
+		Retry:           controller,
+		MaxEmptyRetries: &empty,
+		Wait:            func(context.Context, int, string) error { return nil },
+	}
+	_, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+	if runErr == nil {
+		t.Fatal("Run error = nil, want empty-completion retry budget exhaustion")
+	}
+
+	clock.advance(time.Minute)
+	if allowErr := controller.Allow(); allowErr != nil {
+		t.Fatalf("Allow after empty-completion budget exhaustion on half-open probe = %v (probe stuck until restart)", allowErr)
 	}
 }
 
@@ -777,6 +832,7 @@ type reply struct {
 	status      int
 	headers     http.Header
 	body        []byte
+	bodyReader  io.ReadCloser
 	err         error
 	nilResponse bool
 }
@@ -813,12 +869,20 @@ func (transport *scriptedTransport) Stream(_ context.Context, _ upstream.Session
 	if statusCode == 0 {
 		statusCode = 200
 	}
+	responseBody := selected.bodyReader
+	if responseBody == nil {
+		responseBody = io.NopCloser(bytes.NewReader(selected.body))
+	}
 	return &http.Response{
 		StatusCode: statusCode,
 		Header:     selected.headers.Clone(),
-		Body:       io.NopCloser(bytes.NewReader(selected.body)),
+		Body:       responseBody,
 	}, nil
 }
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func (transport *scriptedTransport) Attempts() int {
 	transport.mu.Lock()

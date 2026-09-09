@@ -4,6 +4,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -26,6 +27,8 @@ const (
 // budget thresholds and finding lower tiers. It is not an effort allowlist;
 // every supported effort still comes from catalog.Model.SupportedReasoningLevels.
 var thinkingBudgetTierOrder = []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+
+var contextWindowMarker = regexp.MustCompile(`(?i)\[(?:1|2)m\]`)
 
 // Selection is one catalog-validated backend model choice.
 type Selection struct {
@@ -51,20 +54,40 @@ func (s Selection) CanonicalID() string {
 // Claude Code discovers and treats as one-million-context capable. The actual
 // auto-compaction window remains the catalog context supplied separately.
 func ClaudeCarrierID(canonicalID string) string {
-	return claudeCarrierPrefix + canonicalID + claudeCarrierSuffix
+	return claudeCarrierPrefix + stripContextWindowMarkers(canonicalID) + claudeCarrierSuffix
+}
+
+// ClaudeCodeID is the model name Clodex's launcher sets in Claude Code's
+// environment. Current Claude Code builds strip [1m] themselves and no longer
+// require an anthropic- prefix for unknown-model discovery.
+func ClaudeCodeID(canonicalID string) string {
+	return stripContextWindowMarkers(canonicalID) + claudeCarrierSuffix
 }
 
 // CanonicalIDFromClaudeCarrier reverses ClaudeCarrierID. It performs no model
 // policy; Resolve still parses and validates the recovered ID against catalog.
 func CanonicalIDFromClaudeCarrier(carrierID string) (string, bool) {
-	if !strings.HasPrefix(carrierID, claudeCarrierPrefix) || !strings.HasSuffix(carrierID, claudeCarrierSuffix) {
+	id := stripContextWindowMarkers(carrierID)
+	if !strings.HasPrefix(id, claudeCarrierPrefix) {
 		return "", false
 	}
-	canonical := strings.TrimSuffix(strings.TrimPrefix(carrierID, claudeCarrierPrefix), claudeCarrierSuffix)
+	canonical := strings.TrimPrefix(id, claudeCarrierPrefix)
 	if canonical == "" {
 		return "", false
 	}
 	return canonical, true
+}
+
+func stripContextWindowMarkers(id string) string {
+	return contextWindowMarker.ReplaceAllString(id, "")
+}
+
+func normalizeExternalID(id string) string {
+	stripped := stripContextWindowMarkers(id)
+	if canonical, ok := CanonicalIDFromClaudeCarrier(stripped); ok {
+		return canonical
+	}
+	return stripped
 }
 
 type parsedID struct {
@@ -78,7 +101,7 @@ type parsedID struct {
 // 2048, 8192, 16384, 32768, and 65536 tokens. Unsupported budget tiers project
 // downward onto efforts advertised by the selected model.
 func Resolve(cat catalog.Catalog, requestedID, defaultID string, thinkingBudget int) (Selection, error) {
-	configured, err := parseID(defaultID)
+	configured, err := parseID(normalizeExternalID(defaultID))
 	if err != nil {
 		return Selection{}, fmt.Errorf("invalid default model ID %q: %w", defaultID, err)
 	}
@@ -95,10 +118,7 @@ func Resolve(cat catalog.Catalog, requestedID, defaultID string, thinkingBudget 
 		}
 	}
 
-	if canonical, ok := CanonicalIDFromClaudeCarrier(requestedID); ok {
-		requestedID = canonical
-	}
-	requested, err := parseID(requestedID)
+	requested, err := parseID(normalizeExternalID(requestedID))
 	if err != nil {
 		return Selection{}, fmt.Errorf("invalid requested model ID %q: %w", requestedID, err)
 	}

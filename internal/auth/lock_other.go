@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 )
 
 func acquireExclusiveLock(ctx context.Context, lockPath string) (*authLock, error) {
@@ -31,7 +30,10 @@ func acquireExclusiveLock(ctx context.Context, lockPath string) (*authLock, erro
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
+		default:
+			if err := waitLockRetry(ctx); err != nil {
+				return nil, err
+			}
 		}
 	}
 }

@@ -214,17 +214,15 @@ func Run(ctx context.Context, args []string, options Options) error {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", options.Port)
 	healthURL := baseURL + "/healthz"
 	baseEnvironment := append([]string(nil), dependencies.Environ()...)
-	// Claude Code caps auto-compaction to its inferred model window. Gateway
-	// discovery only accepts claude-/anthropic- IDs, so a reversible [1m]
-	// carrier avoids its unknown-model 200k fallback. AUTO_COMPACT then applies
-	// the catalog's real context window; the obsolete MAX_CONTEXT override works
-	// only when compaction is disabled and is deliberately removed.
+	// Current Claude Code strips native [1m] markers itself. Clodex therefore
+	// launches with canonical GPT ids plus [1m] and still accepts anthropic-
+	// prefixed carriers from older pickers and /v1/models twins.
 	contextWindow := strconv.Itoa(mainSelection.Model.ContextWindow)
 	claudeEnvironment := replaceEnvironment(baseEnvironment, map[string]string{
 		"ANTHROPIC_BASE_URL":              baseURL,
 		"ANTHROPIC_AUTH_TOKEN":            DummyAuthToken,
-		"ANTHROPIC_MODEL":                 model.ClaudeCarrierID(mainSelection.CanonicalID()),
-		"ANTHROPIC_SMALL_FAST_MODEL":      model.ClaudeCarrierID(smallSelection.CanonicalID()),
+		"ANTHROPIC_MODEL":                 model.ClaudeCodeID(mainSelection.CanonicalID()),
+		"ANTHROPIC_SMALL_FAST_MODEL":      model.ClaudeCodeID(smallSelection.CanonicalID()),
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": contextWindow,
 	})
 

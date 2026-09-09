@@ -47,7 +47,7 @@ func DefaultAuthPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve user home: %w", err)
 	}
-	return auth.CodexAuthPath(home)
+	return auth.ResolveCodexAuthPath(home)
 }
 
 // BrowserLogin completes browser PKCE login and persists Codex-compatible auth.

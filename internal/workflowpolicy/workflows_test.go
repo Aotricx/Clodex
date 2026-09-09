@@ -102,7 +102,7 @@ func TestReleaseWorkflowBuildsAndVerifiesExactAssetSet(t *testing.T) {
 	for _, required := range []string{
 		"- 'v*'", "CGO_ENABLED=0", "-trimpath", "-X main.version=${GITHUB_REF_NAME}",
 		"gh release create", "--draft", "gh release edit", "--draft=false", "sha256sum --check",
-		"gofmt -l", "go test -race ./...",
+		"gofmt -l", "go vet ./...", "go test -race -count=1 ./...",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("release.yml missing %q", required)
@@ -148,7 +148,8 @@ func TestReleaseWorkflowGatesPublishOnUbuntuTests(t *testing.T) {
 	var testJobIDs []string
 	for id, body := range jobs {
 		if strings.Contains(body, "gofmt -l") &&
-			strings.Contains(body, "go test -race ./...") &&
+			strings.Contains(body, "go vet ./...") &&
+			strings.Contains(body, "go test -race -count=1 ./...") &&
 			strings.Contains(body, "runs-on: ubuntu-latest") &&
 			strings.Contains(body, setupGoPin) {
 			testJobIDs = append(testJobIDs, id)
@@ -156,7 +157,7 @@ func TestReleaseWorkflowGatesPublishOnUbuntuTests(t *testing.T) {
 	}
 	sort.Strings(testJobIDs)
 	if len(testJobIDs) != 1 {
-		t.Fatalf("release.yml want one ubuntu test job with gofmt, go test -race ./..., and test.yml setup-go pin; found %v", testJobIDs)
+		t.Fatalf("release.yml want one ubuntu test job with gofmt, go vet, go test -race -count=1 ./..., and test.yml setup-go pin; found %v", testJobIDs)
 	}
 	testJobID := testJobIDs[0]
 

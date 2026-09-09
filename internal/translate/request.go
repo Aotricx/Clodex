@@ -727,6 +727,10 @@ func blockCacheControl(block anthropic.ContentBlock) *anthropic.CacheControl {
 		return block.ToolUse.CacheControl
 	case block.ToolResult != nil:
 		return block.ToolResult.CacheControl
+	case block.Document != nil:
+		return block.Document.CacheControl
+	case block.SearchResult != nil:
+		return block.SearchResult.CacheControl
 	default:
 		return nil
 	}

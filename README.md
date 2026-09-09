@@ -180,9 +180,10 @@ so they are still listed and selectable. For your account's real list, ask a run
 curl -s http://127.0.0.1:8484/v1/models | jq -r '.data[].id'
 ```
 
-Claude Code's model picker receives reversible `anthropic-clodex-…[1m]` carrier IDs: current Claude
-builds filter custom-gateway discovery to Anthropic-prefixed IDs and cap unknown models at 200k.
-Clodex decodes them back to canonical GPT ids — a shim, not an alias policy or a context expansion.
+`clodex claude` sets `ANTHROPIC_MODEL` to a canonical GPT id plus `[1m]` (for example
+`gpt-5.6-sol:medium[1m]`). Current Claude Code strips that marker itself. `/v1/models` still
+lists reversible `anthropic-clodex-…[1m]` twins so older pickers keep working, and the proxy
+unwraps either form back to a catalog GPT id — a shim, not an alias policy or a context expansion.
 
 ## Configuration
 
@@ -204,7 +205,6 @@ All on `127.0.0.1` only, none authenticated.
 
 | Route | Purpose |
 | --- | --- |
-| `HEAD /` | Empty 200 identity probe so the launcher can distinguish Clodex from a foreign listener |
 | `GET /healthz` | Health probe the launcher uses: status, service name, version |
 | `GET /status` | Auth summary, catalog freshness, rate limits, translation-warning and retry/breaker counters, active sessions, and a bounded ring of the last 64 calls' latency (`timing`: TTFT, total, upstream-wait, first-event, and commit-gate durations, plus attempt counts) |
 | `GET /v1/models` | Catalog-derived model list — canonical GPT ids and their carrier twins |
@@ -219,8 +219,8 @@ into an invented cap. A genuine upstream `response.incomplete` still maps to `st
 
 | Symptom | What's happening | Fix |
 | --- | --- | --- |
-| `clodex claude` fails with `clodex claude requires credentials in ~/.codex/auth.json; run clodex auth login or clodex auth device first` (wrapped with `open .../.codex/auth.json: no such file or directory`) | `clodex claude` requires real credentials before it will launch anything — unlike `clodex serve` alone, which starts fine with no auth and only fails once a request actually needs it | `clodex auth login` or `clodex auth device` first |
-| `foreign listener on Clodex port at http://127.0.0.1:8484: ...` | Something else is already listening on that port and it isn't Clodex (it fails the `/healthz` identity check). Clodex refuses to reuse it and won't kill it | Free the port, or point Clodex elsewhere with `--port`/`CLODEX_PORT` |
+| `clodex claude` fails with `clodex claude requires credentials in …/auth.json; run clodex auth login or clodex auth device first` (wrapped with `open …/auth.json: no such file or directory`) | `clodex claude` requires real credentials before it will launch anything — unlike `clodex serve` alone, which starts fine with no auth and only fails once a request actually needs it. Auth commands honor `CODEX_HOME` the same way `serve` does | `clodex auth login` or `clodex auth device` first |
+| `foreign listener on Clodex port at http://127.0.0.1:8484: ...` | Something else is already listening on that port and it isn't Clodex (it fails the `/healthz` identity check). Clodex refuses to reuse it and won't kill it | Free the port, or point Clodex elsewhere with `CLODEX_PORT` (`clodex claude` has no `--port` flag; `clodex serve` accepts `--port`) |
 | `run Claude Code: proxy did not become healthy within <timeout>` or `...proxy exited before becoming healthy` | Clodex tried to spawn its own proxy and it never came up (or came up and died) | Run `clodex serve --port <N>` standalone in a second shell and read what it prints on startup — usually a config or auth problem |
 | `run Claude Code: find claude executable: ...` | Claude Code isn't on `PATH` | Install Claude Code, or fix `PATH` |
 | `run Claude Code: claude exited: exit status N` | Claude Code itself exited non-zero — `clodex claude`'s own exit code mirrors it | Not a Clodex failure; look at Claude Code's own stderr above this line |

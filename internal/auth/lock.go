@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // authLock holds an advisory exclusive lock on the sibling lock file next to
@@ -125,4 +126,20 @@ func goroutineID() uint64 {
 		id = id*10 + uint64(c-'0')
 	}
 	return id
+}
+
+func waitLockRetry(ctx context.Context) error {
+	timer := time.NewTimer(20 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

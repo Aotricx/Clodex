@@ -228,8 +228,9 @@ func decodeContentBlock(raw json.RawMessage, path string) (ContentBlock, error) 
 	if err != nil {
 		return ContentBlock{}, err
 	}
+	decodedType := strings.ToLower(blockType)
 	block := ContentBlock{Type: blockType, Raw: cloneRaw(raw)}
-	switch blockType {
+	switch decodedType {
 	case "text":
 		text, err := requiredString(object, "text", path+".text")
 		if err != nil {
@@ -286,6 +287,9 @@ func decodeContentBlock(raw json.RawMessage, path string) (ContentBlock, error) 
 			return ContentBlock{}, err
 		}
 		block.RedactedThinking = &RedactedThinkingBlock{Data: data}
+	}
+	if !block.Unknown() {
+		block.Type = decodedType
 	}
 	return block, nil
 }

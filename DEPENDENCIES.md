@@ -8,6 +8,7 @@ here with the source and license evidence used to admit them.
 | Module | Relationship | Version / source commit | License | Purpose and runtime behavior |
 | --- | --- | --- | --- | --- |
 | `github.com/tiktoken-go/tokenizer` | direct | `v0.8.1` / `ca39f5c7bff9edfc9d70012c5dfdf23b44f7971e` | MIT; full text and attribution in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | Exact `o200k_base` lexical counting. `codec/o200k_base_vocab.go` contains the generated vocabulary as compiled Go data; `tokenizer.Get(tokenizer.O200kBase)` performs no runtime file or network access. |
+| `golang.org/x/image` | direct | `v0.46.0` / `b06f1de3f4900ff828b8f114c37eb9ea10dfed90` | BSD-3-Clause; full text and attribution in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | Offline WebP decoding used by `internal/tokenizer` image token estimates. |
 | `github.com/dlclark/regexp2/v2` | indirect through tokenizer | `v2.5.1` / `0ec61737c1e8483bb16083a916fa9a3bd21f91bb` | MIT; full text and attribution in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | Pure-Go regular-expression engine used by the tokenizer's o200k pre-tokenization pattern. |
 
 Module versions, commits, and checksums were verified with `go mod download

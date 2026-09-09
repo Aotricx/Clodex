@@ -414,6 +414,7 @@ func TestDecodeRequestRejectsKnownBlocksInInvalidRolesAndPlacements(t *testing.T
 	tests := []string{
 		`{"model":"m","max_tokens":1,"system":[{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}],"messages":[{"role":"user","content":"x"}]}`,
 		`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[{"type":"tool_use","id":"u","name":"n","input":{}}]}]}`,
+		`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[{"type":"Tool_Use","id":"u","name":"n","input":{}}]}]}`,
 		`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[{"type":"thinking","thinking":"x","signature":"s"}]}]}`,
 		`{"model":"m","max_tokens":1,"messages":[{"role":"assistant","content":[{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}]}]}`,
 		`{"model":"m","max_tokens":1,"messages":[{"role":"assistant","content":[{"type":"tool_result","tool_use_id":"u","content":"x"}]}]}`,

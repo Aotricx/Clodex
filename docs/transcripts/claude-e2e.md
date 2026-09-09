@@ -5,6 +5,12 @@ Date: 2026-07-21. Installed Claude Code reported `2.1.141`; the supplied
 this transcript retains semantic events and usage but omits session IDs,
 machine plugin paths, and opaque signatures.
 
+Live e2e as of 2026-09-09 uses `gpt-5.6-luna:low` (`internal/claudee2e/live_test.go`).
+The `gpt-5.4-mini:low` commands below are historical: that slug is absent from the
+current Codex catalog. Current `clodex claude` sets `ANTHROPIC_MODEL` to
+`canonical[1m]` (no `anthropic-clodex-` prefix); `/v1/models` still emits the
+carrier twins recorded here.
+
 ## Launcher context correction
 
 ```text

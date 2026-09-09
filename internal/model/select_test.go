@@ -62,6 +62,48 @@ func TestMalformedCarrierRemainsUnknownFallback(t *testing.T) {
 	}
 }
 
+func TestResolveAcceptsStrippedClaudeCarrierAndPlainContextSuffix(t *testing.T) {
+	cat := fallbackCatalog(t)
+	tests := []struct {
+		request, wantID string
+	}{
+		{"anthropic-clodex-gpt-5.6-sol", "gpt-5.6-sol:medium"},
+		{"anthropic-clodex-gpt-5.6-sol:low", "gpt-5.6-sol:low"},
+		{"anthropic-clodex-gpt-5.6-sol:high:fast", "gpt-5.6-sol:high:fast"},
+		{"gpt-5.6-sol:low[1m]", "gpt-5.6-sol:low"},
+		{"gpt-5.6-sol:high:fast[1m]", "gpt-5.6-sol:high:fast"},
+		{"gpt-5.6-sol[1m]", "gpt-5.6-sol:medium"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.request, func(t *testing.T) {
+			got, err := Resolve(cat, tc.request, "gpt-5.6-luna:low", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.CanonicalID() != tc.wantID {
+				t.Fatalf("Resolve(%q) ID = %q, want %q", tc.request, got.CanonicalID(), tc.wantID)
+			}
+		})
+	}
+}
+
+func TestResolveUnwrapsCarrierDefaultID(t *testing.T) {
+	cat := fallbackCatalog(t)
+	got, err := Resolve(cat, "gpt-5.6-sol", "anthropic-clodex-gpt-5.6-sol:high[1m]", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model.Slug != "gpt-5.6-sol" {
+		t.Fatalf("Resolve() = %+v, want gpt-5.6-sol", got)
+	}
+}
+
+func TestClaudeCodeIDTagsCanonicalWithoutCarrierPrefix(t *testing.T) {
+	if got := ClaudeCodeID("gpt-5.6-sol:medium"); got != "gpt-5.6-sol:medium[1m]" {
+		t.Fatalf("ClaudeCodeID() = %q", got)
+	}
+}
+
 func TestResolveRejectsMalformedModelIDs(t *testing.T) {
 	cat := fallbackCatalog(t)
 	for _, request := range []string{

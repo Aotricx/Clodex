@@ -119,6 +119,8 @@ func (r *Reducer) Push(upstream codexstream.Event) ([]Event, error) {
 		raw := bytes.Clone(upstream.Raw)
 		r.rateLimits = append(r.rateLimits, raw)
 		return []Event{{Kind: KindRateLimits, RateLimits: &RateLimitSnapshot{Raw: bytes.Clone(raw)}}}, nil
+	case "error":
+		return r.failFromErrorEvent(upstream)
 	case "response.completed", "response.done", "response.incomplete", "response.failed":
 		return r.finish(upstream)
 	default:
@@ -202,7 +204,9 @@ func (r *Reducer) outputItem(upstream codexstream.Event, done bool) ([]Event, er
 		if !done {
 			return events, nil
 		}
-		if state.block.Thinking == "" {
+		rebuilt := joinSummaryParts(item.Summary)
+		current := strings.TrimSuffix(state.block.Thinking, "\n\n")
+		if current == "" {
 			for _, summary := range item.Summary {
 				if summary.Text == "" {
 					continue
@@ -216,6 +220,11 @@ func (r *Reducer) outputItem(upstream codexstream.Event, done bool) ([]Event, er
 				r.semantic = true
 				events = append(events, contentDelta(state, DeltaThinking, summary.Text))
 			}
+		} else if rebuilt != "" && rebuilt != current && rebuilt != state.block.Thinking && strings.HasPrefix(rebuilt, current) {
+			rest := rebuilt[len(current):]
+			state.block.Thinking = rebuilt
+			r.semantic = true
+			events = append(events, contentDelta(state, DeltaThinking, rest))
 		}
 		closed, err := r.close(state)
 		return append(events, closed...), err
@@ -412,6 +421,9 @@ func (r *Reducer) functionArguments(upstream codexstream.Event, done bool) ([]Ev
 	if state == nil || state.block.Type != BlockToolUse {
 		return nil, fmt.Errorf("%w: arguments lack a function-call item", ErrMalformedContent)
 	}
+	if state.closed {
+		return nil, nil
+	}
 	value := decoded.Delta
 	if done {
 		value = decoded.Arguments
@@ -445,6 +457,13 @@ func (r *Reducer) textEvent(upstream codexstream.Event, done, refusal bool) ([]E
 		if refusal {
 			value = payload.Refusal
 		}
+	}
+	if state.closed {
+		if done && value != "" && state.block.Text == "" {
+			state.block.Text = value
+			r.semantic = true
+		}
+		return events, nil
 	}
 	if value != "" && (!done || state.block.Text == "") {
 		state.block.Text += value
@@ -769,6 +788,48 @@ func (r *Reducer) duplicateTerminal(upstream codexstream.Event) ([]Event, error)
 		return nil, nil
 	}
 	return nil, ErrContradictoryTerminal
+}
+
+func (r *Reducer) failFromErrorEvent(upstream codexstream.Event) ([]Event, error) {
+	var payload struct {
+		Error   *terminalError `json:"error"`
+		Message string         `json:"message"`
+	}
+	_ = json.Unmarshal(upstream.Raw, &payload)
+	states := append([]*blockState(nil), r.blocks...)
+	sort.Slice(states, func(i, j int) bool { return states[i].index < states[j].index })
+	var events []Event
+	for _, state := range states {
+		if state.closed {
+			continue
+		}
+		state.closed = true
+		events = append(events, Event{Kind: KindContentStop, Index: state.index})
+	}
+	message := "upstream error"
+	if payload.Error != nil && payload.Error.Message != "" {
+		message = payload.Error.Message
+	} else if payload.Message != "" {
+		message = payload.Message
+	}
+	r.termType = upstream.Type
+	r.termRaw = bytes.Clone(upstream.Raw)
+	r.finalErr = fmt.Errorf("%w: %s", ErrUpstreamFailed, message)
+	return events, r.finalErr
+}
+
+func joinSummaryParts(parts []summaryPart) string {
+	var rebuilt strings.Builder
+	for _, summary := range parts {
+		if summary.Text == "" {
+			continue
+		}
+		if rebuilt.Len() > 0 {
+			rebuilt.WriteString("\n\n")
+		}
+		rebuilt.WriteString(summary.Text)
+	}
+	return rebuilt.String()
 }
 
 func jsonEqual(left, right []byte) bool {

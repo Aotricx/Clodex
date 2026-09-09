@@ -91,6 +91,7 @@ func TestDeviceLoginPrintsInstructionsBeforePollingAndPersists(t *testing.T) {
 }
 
 func TestDefaultAuthPathUsesOSUserHome(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("resolve test user home: %v", err)
@@ -101,6 +102,19 @@ func TestDefaultAuthPathUsesOSUserHome(t *testing.T) {
 		t.Fatalf("DefaultAuthPath: %v", err)
 	}
 	want := filepath.Join(home, ".codex", "auth.json")
+	if got != want {
+		t.Fatalf("DefaultAuthPath() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultAuthPathHonorsCODEXHOME(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+	got, err := DefaultAuthPath()
+	if err != nil {
+		t.Fatalf("DefaultAuthPath: %v", err)
+	}
+	want := filepath.Join(dir, "auth.json")
 	if got != want {
 		t.Fatalf("DefaultAuthPath() = %q, want %q", got, want)
 	}

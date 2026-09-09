@@ -155,7 +155,7 @@ func TestRequireCodexAuthMissingFile(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("requireCodexAuth() error = %v, want wrapping os.ErrNotExist", err)
 	}
-	want := "clodex claude requires credentials in ~/.codex/auth.json; run clodex auth login or clodex auth device first"
+	want := "clodex claude requires credentials in " + path + "; run clodex auth login or clodex auth device first"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("requireCodexAuth() error = %q, want containing %q", err, want)
 	}
