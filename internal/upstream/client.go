@@ -400,11 +400,22 @@ func redactBody(body []byte, contentType string) string {
 	return redact.Text(string(body))
 }
 
+// isEventStreamResponse reports whether a success response carries an SSE body.
+// The Codex backend streams `/responses` without a Content-Type header at all,
+// so an absent or empty header is accepted; a header that is present must name
+// text/event-stream, which still rejects an HTML error or JSON body served 200.
 func isEventStreamResponse(response *http.Response) bool {
-	if response == nil || response.Header == nil {
+	if response == nil {
 		return false
 	}
-	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	declared := ""
+	if response.Header != nil {
+		declared = strings.TrimSpace(response.Header.Get("Content-Type"))
+	}
+	if declared == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(declared)
 	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
 }
 

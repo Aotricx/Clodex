@@ -383,6 +383,31 @@ func TestClientAcceptsEventStreamWithCharsetParameter(t *testing.T) {
 	}
 }
 
+// The Codex backend streams /responses with no Content-Type header at all, so
+// requiring one rejected every successful turn and relabeled it 415.
+func TestClientAcceptsEventStreamWithoutContentType(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header()["Content-Type"] = nil
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+	}))
+	defer server.Close()
+
+	client := testClient(t, server)
+	response, err := client.Stream(context.Background(), Session{SessionID: "s", ThreadID: "t"}, codexwire.Request{Model: "m"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200 for an SSE body with no Content-Type", response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil || !strings.Contains(string(body), "response.completed") {
+		t.Fatalf("body = %q, %v", body, err)
+	}
+}
+
 func TestClientSkipsWireDumpWhenDoCanceledOrDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
