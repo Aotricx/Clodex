@@ -44,7 +44,7 @@ func TestClaudeCarrierRoundTripsCanonicalSelection(t *testing.T) {
 	if !ok || decoded != canonical {
 		t.Fatalf("decoded = %q, %v", decoded, ok)
 	}
-	got, err := Resolve(cat, carrier, "gpt-5.4-mini:low", 0)
+	got, err := Resolve(cat, carrier, "gpt-5.6-luna:low", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +56,11 @@ func TestClaudeCarrierRoundTripsCanonicalSelection(t *testing.T) {
 func TestMalformedCarrierRemainsUnknownFallback(t *testing.T) {
 	cat := fallbackCatalog(t)
 	for _, request := range []string{"anthropic-clodex-gpt-5.6-sol[wrong]", "anthropic-clodex-[1m]", "anthropic-clodex-future[1m]"} {
-		got, err := Resolve(cat, request, "gpt-5.4-mini:low", 0)
+		got, err := Resolve(cat, request, "gpt-5.6-luna:low", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Model.Slug != "gpt-5.4-mini" || got.Effort != "low" {
+		if got.Model.Slug != "gpt-5.6-luna" || got.Effort != "low" {
 			t.Fatalf("Resolve(%q) = %+v", request, got)
 		}
 	}
@@ -190,12 +190,12 @@ func TestResolveThinkingBudgetBoundaries(t *testing.T) {
 
 func TestResolveProjectsBudgetOntoCatalogEfforts(t *testing.T) {
 	cat := fallbackCatalog(t)
-	got, err := Resolve(cat, "gpt-5.4-mini", "gpt-5.6-sol:medium", 65537)
+	got, err := Resolve(cat, "gpt-5.5", "gpt-5.6-sol:medium", 65537)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Effort != "xhigh" {
-		t.Fatalf("mini ultra budget = %q, want xhigh", got.Effort)
+		t.Fatalf("gpt-5.5 ultra budget = %q, want xhigh", got.Effort)
 	}
 
 	sparse := catalog.Catalog{Models: []catalog.Model{{
@@ -222,8 +222,8 @@ func TestResolveValidatesExplicitAndDefaultEfforts(t *testing.T) {
 	tests := []struct {
 		name, request, defaultID string
 	}{
-		{"unsupported requested effort", "gpt-5.4-mini:max", "gpt-5.6-sol:medium"},
-		{"unsupported fallback default effort", "claude-opus-4-1", "gpt-5.4-mini:max"},
+		{"unsupported requested effort", "gpt-5.5:max", "gpt-5.6-sol:medium"},
+		{"unsupported fallback default effort", "claude-opus-4-1", "gpt-5.5:max"},
 		{"unknown requested effort", "gpt-5.6-sol:minimal", "gpt-5.6-sol:medium"},
 	}
 	for _, tc := range tests {
@@ -246,15 +246,22 @@ func TestResolveValidatesFastCapability(t *testing.T) {
 		t.Fatalf("fast selection = %+v", got)
 	}
 
+	// Every model in the live catalog advertises a fast tier, so the rejection
+	// cases need a catalog that explicitly contains a model without one.
+	nofast := catalog.Catalog{Models: []catalog.Model{
+		{Slug: "nofast", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []catalog.ReasoningLevel{{Effort: "medium"}}},
+		{Slug: "hasfast", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []catalog.ReasoningLevel{{Effort: "medium"}},
+			AdditionalSpeedTiers: []string{"fast"}, ServiceTiers: []catalog.ServiceTier{{ID: "priority"}}, DefaultServiceTier: "priority"},
+	}}
 	for _, tc := range []struct {
 		name, request, defaultID string
 	}{
-		{"model does not advertise fast", "gpt-5.4-mini:fast", "gpt-5.6-sol:medium"},
-		{"fallback model does not advertise fast", "claude-opus-4-1:fast", "gpt-5.4-mini:medium"},
-		{"default fast unsupported", "gpt-5.6-sol", "gpt-5.4-mini:medium:fast"},
+		{"model does not advertise fast", "nofast:fast", "hasfast:medium"},
+		{"fallback model does not advertise fast", "claude-opus-4-1:fast", "nofast:medium"},
+		{"default fast unsupported", "hasfast", "nofast:medium:fast"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Resolve(cat, tc.request, tc.defaultID, 0)
+			_, err := Resolve(nofast, tc.request, tc.defaultID, 0)
 			if err == nil || !strings.Contains(err.Error(), "fast") {
 				t.Fatalf("Resolve() error = %v", err)
 			}
@@ -282,7 +289,7 @@ func TestResolveRejectsInvalidDefaultIDEvenWhenRequestIsKnown(t *testing.T) {
 	for _, defaultID := range []string{
 		"missing-model:medium",
 		"gpt-5.6-sol::fast",
-		"gpt-5.4-mini:max",
+		"gpt-5.5:max",
 	} {
 		t.Run(defaultID, func(t *testing.T) {
 			if _, err := Resolve(cat, "gpt-5.6-sol", defaultID, 0); err == nil {
@@ -300,8 +307,8 @@ func TestNearestSupportedFloor(t *testing.T) {
 		{"gpt-5.6-sol", "ultra", "max"},
 		{"gpt-5.6-sol", "max", "xhigh"},
 		{"gpt-5.6-luna", "ultra", "max"},
-		{"gpt-5.4-mini", "max", "xhigh"},
-		{"gpt-5.4", "high", "medium"},
+		{"gpt-5.5", "max", "xhigh"},
+		{"gpt-5.5", "high", "medium"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.model+"/"+tc.rejected, func(t *testing.T) {

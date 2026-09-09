@@ -139,7 +139,7 @@ func TestCountTokensPromptCacheKeyMatchesMessagesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionHeader := "session-count"
-	countBody := `{"model":"gpt-5.4-mini:low","messages":[{"role":"user","content":[{"type":"text","text":"count","cache_control":{"type":"ephemeral"}}]}]}`
+	countBody := `{"model":"gpt-5.6-luna:low","messages":[{"role":"user","content":[{"type":"text","text":"count","cache_control":{"type":"ephemeral"}}]}]}`
 	countRequest := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(countBody))
 	countRequest.Header.Set("Content-Type", "application/json")
 	countRequest.Header.Set("x-claude-code-session-id", sessionHeader)
@@ -151,7 +151,7 @@ func TestCountTokensPromptCacheKeyMatchesMessagesSession(t *testing.T) {
 
 	transport := &messageTransport{body: messageSuccessSSE("counted")}
 	service := testMessagesService(t, transport)
-	messageBody := `{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"count","cache_control":{"type":"ephemeral"}}]}]}`
+	messageBody := `{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"count","cache_control":{"type":"ephemeral"}}]}]}`
 	messageRequest := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(messageBody))
 	messageRequest.Header.Set("Content-Type", "application/json")
 	messageRequest.Header.Set("x-claude-code-session-id", sessionHeader)

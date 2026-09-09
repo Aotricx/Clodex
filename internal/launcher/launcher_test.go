@@ -553,7 +553,7 @@ func TestRunUsesShippingModelDefaults(t *testing.T) {
 	}
 	assertEnv(t, command.Env, map[string]string{
 		"ANTHROPIC_MODEL":                 "anthropic-clodex-gpt-5.6-sol:medium[1m]",
-		"ANTHROPIC_SMALL_FAST_MODEL":      "anthropic-clodex-gpt-5.4-mini:low[1m]",
+		"ANTHROPIC_SMALL_FAST_MODEL":      "anthropic-clodex-gpt-5.6-luna:low[1m]",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "272000",
 	})
 }

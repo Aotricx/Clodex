@@ -272,7 +272,7 @@ func TestManagerResolutionOrderAndHonestTelemetry(t *testing.T) {
 		manager, _, closeServer := liveManager(t, now, path, http.StatusOK, `{"models":[{"slug":"invalid"}]}`)
 		defer closeServer()
 		got, err := manager.Resolve(context.Background())
-		if err != nil || got.Source != SourceFallback || len(got.Catalog.Models) != 7 || got.CacheError == nil || got.LiveError == nil {
+		if err != nil || got.Source != SourceFallback || len(got.Catalog.Models) != 6 || got.CacheError == nil || got.LiveError == nil {
 			t.Fatalf("Resolve() = source %q models %d cacheErr %v liveErr %v finalErr %v", got.Source, len(got.Catalog.Models), got.CacheError, got.LiveError, err)
 		}
 	})

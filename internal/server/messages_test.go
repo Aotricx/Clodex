@@ -24,7 +24,7 @@ func TestMessagesBufferedAndStreamingUseSameReducer(t *testing.T) {
 		t.Run(map[bool]string{false: "buffered", true: "streaming"}[streaming], func(t *testing.T) {
 			transport := &messageTransport{body: messageSuccessSSE("hello")}
 			service := testMessagesService(t, transport)
-			body := `{"model":"gpt-5.4-mini:low","max_tokens":32000,"messages":[{"role":"user","content":"say hello"}],"stream":` + map[bool]string{false: "false", true: "true"}[streaming] + `}`
+			body := `{"model":"gpt-5.6-luna:low","max_tokens":32000,"messages":[{"role":"user","content":"say hello"}],"stream":` + map[bool]string{false: "false", true: "true"}[streaming] + `}`
 			request := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", strings.NewReader(body))
 			request.Header.Set("x-claude-code-session-id", "123e4567-e89b-12d3-a456-426614174000")
 			response := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestMessagesBufferedAndStreamingUseSameReducer(t *testing.T) {
 						OutputTokens int64 `json:"output_tokens"`
 					} `json:"usage"`
 				}
-				if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil || decoded.Model != "gpt-5.4-mini:low" || decoded.StopReason != "end_turn" || len(decoded.Content) != 1 || decoded.Content[0].Text != "hello" || decoded.Usage.InputTokens != 7 || decoded.Usage.OutputTokens != 3 {
+				if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil || decoded.Model != "gpt-5.6-luna:low" || decoded.StopReason != "end_turn" || len(decoded.Content) != 1 || decoded.Content[0].Text != "hello" || decoded.Usage.InputTokens != 7 || decoded.Usage.OutputTokens != 3 {
 					t.Fatalf("buffered response = %s, error=%v", response.Body.Bytes(), err)
 				}
 			}
@@ -69,7 +69,7 @@ func TestMessagesBufferedAndStreamingUseSameReducer(t *testing.T) {
 				t.Fatalf("upstream sessions = %#v", sessions)
 			}
 			requests := transport.Requests()
-			if len(requests) != 1 || requests[0].PromptCacheKey != sessions[0].ThreadID || requests[0].Model != "gpt-5.4-mini" || requests[0].Reasoning == nil || requests[0].Reasoning.Effort != "low" {
+			if len(requests) != 1 || requests[0].PromptCacheKey != sessions[0].ThreadID || requests[0].Model != "gpt-5.6-luna" || requests[0].Reasoning == nil || requests[0].Reasoning.Effort != "low" {
 				t.Fatalf("upstream requests = %#v", requests)
 			}
 		})
@@ -79,7 +79,7 @@ func TestMessagesBufferedAndStreamingUseSameReducer(t *testing.T) {
 func TestMessagesFailureBeforeSemanticOutputPreservesHTTPError(t *testing.T) {
 	transport := &messageTransport{status: http.StatusForbidden, body: []byte(`{"detail":"account cannot use model"}`)}
 	service := testMessagesService(t, transport)
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	assertAnthropicError(t, response, http.StatusForbidden, "permission_error")
@@ -93,7 +93,7 @@ func TestMessagesEmptyCompletionNeverCommitsStreaming200(t *testing.T) {
 	service := testMessagesService(t, transport)
 	zero := 0
 	service.engine.MaxEmptyRetries = &zero
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	assertAnthropicError(t, response, http.StatusServiceUnavailable, "api_error")
@@ -110,7 +110,7 @@ func TestMessagesSynchronizesRetryBudgetAndCircuitStatus(t *testing.T) {
 	}
 	one := 1
 	service.engine.MaxEmptyRetries = &one
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}]}`))
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	if got := service.status.Snapshot().Retry.RemainingBudget; got != 99 {
@@ -124,7 +124,7 @@ func TestMessagesStreamingEmitsIdlePingAfterCommit(t *testing.T) {
 	transport := &blockingMessageTransport{firstWritten: first, release: release}
 	service := testMessagesService(t, transport)
 	service.heartbeatInterval = 5 * time.Millisecond
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
 	response := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -146,7 +146,7 @@ func TestMessagesStreamingHeartbeatAfterMessageStopStillRecordsSuccess(t *testin
 	transport := &lingeringMessageTransport{completed: completed, release: release}
 	service := testMessagesService(t, transport)
 	service.heartbeatInterval = 5 * time.Millisecond
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
 	response := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -296,7 +296,7 @@ func TestMessagesStreamingRecordsTimingSample(t *testing.T) {
 		tick++
 		return base.Add(time.Duration(tick) * time.Second)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -327,7 +327,7 @@ func TestMessagesBufferedRecordsTimingSample(t *testing.T) {
 		tick++
 		return base.Add(time.Duration(tick) * time.Second)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}]}`))
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -349,7 +349,7 @@ func TestMessagesBufferedRecordsTimingSample(t *testing.T) {
 func TestMessagesFailureRecordsNoTimingSample(t *testing.T) {
 	transport := &messageTransport{status: http.StatusForbidden, body: []byte(`{"error":{"message":"account cannot use model"}}`)}
 	service := testMessagesService(t, transport)
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":true}`))
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	if timing := service.status.Snapshot().Timing; timing.Count != 0 || len(timing.Samples) != 0 {

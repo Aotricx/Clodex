@@ -42,7 +42,7 @@ func TestMessagesServiceParallelStreamingAndBufferedSessions(t *testing.T) {
 			defer group.Done()
 			<-start
 			stream := index%2 == 0
-			body := `{"model":"gpt-5.4-mini:low","max_tokens":32,"messages":[{"role":"user","content":"parallel"}],"stream":` + map[bool]string{false: "false", true: "true"}[stream] + `}`
+			body := `{"model":"gpt-5.6-luna:low","max_tokens":32,"messages":[{"role":"user","content":"parallel"}],"stream":` + map[bool]string{false: "false", true: "true"}[stream] + `}`
 			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 			request.Header.Set("x-claude-code-session-id", "parallel-session-"+strconv.Itoa(index))
 			response := httptest.NewRecorder()
@@ -63,7 +63,7 @@ func TestMessagesServiceParallelStreamingAndBufferedSessions(t *testing.T) {
 func TestMessagesStreamingSurvivesSlowBackpressuredWriter(t *testing.T) {
 	service := concurrentMessagesService(t, &messageTransport{body: messageSuccessSSE(strings.Repeat("x", 4096))}, nil)
 	writer := newBackpressuredWriter()
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":8192,"messages":[{"role":"user","content":"slow"}],"stream":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":8192,"messages":[{"role":"user","content":"slow"}],"stream":true}`))
 	done := make(chan struct{})
 	go func() {
 		service.ServeHTTP(writer, request)
@@ -96,7 +96,7 @@ func TestMessagesMidStreamCancellationCancelsUpstreamAndReleasesGoroutines(t *te
 	transport := &cancelAwareTransport{contextCanceled: make(chan struct{}), bodyDone: make(chan struct{})}
 	service := concurrentMessagesService(t, transport, nil)
 	requestContext, cancel := context.WithCancel(context.Background())
-	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4-mini:low","max_tokens":32,"messages":[{"role":"user","content":"cancel"}],"stream":true}`)).WithContext(requestContext)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.6-luna:low","max_tokens":32,"messages":[{"role":"user","content":"cancel"}],"stream":true}`)).WithContext(requestContext)
 	writer := &signalWriter{header: make(http.Header), firstWrite: make(chan struct{})}
 	handlerDone := make(chan struct{})
 	go func() {
@@ -179,7 +179,7 @@ func TestHandlerConcurrentStatusCountTokensAndCatalogManagerRefresh(t *testing.T
 	})
 	state := clodexstatus.New("test")
 	handler, err := New(Options{
-		Version: "test", Status: state, Catalog: resolver, Counter: mustCounter(t), DefaultModel: "gpt-5.4-mini:low",
+		Version: "test", Status: state, Catalog: resolver, Counter: mustCounter(t), DefaultModel: "gpt-5.6-luna:low",
 		Messages: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 	})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestHandlerConcurrentStatusCountTokensAndCatalogManagerRefresh(t *testing.T
 		}()
 		go func() {
 			defer group.Done()
-			request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"gpt-5.4-mini:low","messages":[{"role":"user","content":"count"}]}`))
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"gpt-5.6-luna:low","messages":[{"role":"user","content":"count"}]}`))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
@@ -360,7 +360,7 @@ func concurrentJWT(t *testing.T, payload map[string]any) string {
 }
 
 const concurrentCatalogJSON = `{"models":[{
-	"slug":"gpt-5.4-mini","display_name":"Mini","description":"test",
+	"slug":"gpt-5.6-luna","display_name":"Mini","description":"test",
 	"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"}],
 	"context_window":272000,"max_context_window":272000,"effective_context_window_percent":95,
 	"supports_parallel_tool_calls":true,"supports_image_detail_original":true,

@@ -46,13 +46,12 @@ func TestLoadFallbackExactCatalog(t *testing.T) {
 		fast, lite                                            bool
 	}
 	want := []wantModel{
-		{"gpt-5.6-sol", "GPT-5.6-Sol", "Latest frontier agentic coding model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 1, 272000, true, true},
-		{"gpt-5.6-terra", "GPT-5.6-Terra", "Balanced agentic coding model for everyday work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 2, 272000, true, true},
-		{"gpt-5.6-luna", "GPT-5.6-Luna", "Fast and affordable agentic coding model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 3, 272000, true, true},
-		{"gpt-5.5", "GPT-5.5", "Frontier model for complex coding, research, and real-world work.", "xhigh", "list", []string{"low", "medium", "high", "xhigh"}, 7, 272000, true, false},
-		{"gpt-5.4", "GPT-5.4", "Strong model for everyday coding.", "medium", "list", []string{"low", "medium", "high", "xhigh"}, 16, 1000000, true, false},
-		{"gpt-5.4-mini", "GPT-5.4-Mini", "Small, fast, and cost-efficient model for simpler coding tasks.", "medium", "list", []string{"low", "medium", "high", "xhigh"}, 23, 272000, false, false},
-		{"codex-auto-review", "Codex Auto Review", "Automatic approval review model for Codex.", "medium", "hide", []string{"low", "medium", "high", "xhigh"}, 43, 1000000, false, false},
+		{"gpt-reserve", "GPT-Reserve", "Fast and affordable agentic coding model.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 3, 272000, true, true},
+		{"gpt-5.6-sol", "GPT-5.6-Sol", "Reliable agentic workhorse for everyday tasks.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 6, 272000, true, true},
+		{"gpt-5.6-terra", "GPT-5.6-Terra", "Balanced agentic coding model for everyday work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 7, 272000, true, true},
+		{"gpt-5.6-luna", "GPT-5.6-Luna", "Fast and affordable agentic coding model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 8, 272000, true, true},
+		{"gpt-5.5", "GPT-5.5", "Proven previous-generation model for coding and general work.", "xhigh", "list", []string{"low", "medium", "high", "xhigh"}, 12, 272000, true, false},
+		{"codex-auto-review", "Codex Auto Review", "Automatic approval review model for Codex.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 43, 272000, true, true},
 	}
 	if len(c.Models) != len(want) {
 		t.Fatalf("len(Models) = %d, want %d", len(c.Models), len(want))
