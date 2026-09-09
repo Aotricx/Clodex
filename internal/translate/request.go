@@ -145,7 +145,13 @@ func TranslateRequest(req *anthropic.MessageRequest, selection model.Selection, 
 		ServiceTier:       selection.ServiceTier,
 		PromptCacheKey:    t.promptCacheKey(req),
 	}
-	if selection.Model.UseResponsesLite {
+	// The backend rejects the Responses Lite path outright unless
+	// parallel_tool_calls is false ("X-OpenAI-Internal-Codex-Responses-Lite
+	// requires `parallel_tool_calls` to be false"), so a request that actually
+	// wants parallel tool calls has to use the full Responses protocol to keep
+	// that capability. Lite still applies whenever parallelism is moot (no
+	// tools offered) or the client disabled it.
+	if selection.Model.UseResponsesLite && !(parallel && len(tools) > 0) {
 		wire.Input = t.responsesLiteInput(instructions, tools, input)
 		wire.Instructions = ""
 		wire.Tools = nil

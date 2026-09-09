@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const liveModel = "gpt-5.4-mini:low"
+const liveModel = "gpt-5.6-luna:low"
 
 type anthropicResponse struct {
 	Content    []json.RawMessage `json:"content"`

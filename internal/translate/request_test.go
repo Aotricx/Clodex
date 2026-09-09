@@ -2,11 +2,13 @@ package translate
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Aotricx/Clodex/internal/anthropic"
 	"github.com/Aotricx/Clodex/internal/catalog"
+	"github.com/Aotricx/Clodex/internal/codexwire"
 	"github.com/Aotricx/Clodex/internal/model"
 )
 
@@ -266,7 +268,8 @@ func TestTranslateRequestResponsesLiteExactPrefixAndDetailStripping(t *testing.T
 			{"type":"image","source":{"type":"url","url":"https://example.com/input.png"}},
 			{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"image","source":{"type":"url","url":"https://example.com/result.png"}}]}
 		]}],
-		"tools":[{"name":"read","input_schema":{"type":"object"}}]
+		"tools":[{"name":"read","input_schema":{"type":"object"}}],
+		"tool_choice":{"type":"auto","disable_parallel_tool_use":true}
 	}`)
 	selection := normalSelection()
 	selection.Model.Slug = "gpt-5.6-sol"
@@ -503,4 +506,57 @@ func TestTranslateInArraySystemMessageBecomesDeveloperMessage(t *testing.T) {
 			t.Fatalf("warnings = %+v, want no unknown-content-block warning", result.Warnings)
 		}
 	}
+}
+
+// A Lite-marked model must leave the Lite path when the client actually wants
+// parallel tool calls, because the backend rejects Lite unless
+// parallel_tool_calls is false. Without this the parallel capability would be
+// silently unavailable on every Lite model.
+func TestTranslateRequestLeavesResponsesLiteForParallelToolCalls(t *testing.T) {
+	const body = `{
+		"model":"m","max_tokens":1,"system":"instructions",
+		"messages":[{"role":"user","content":"go"}],
+		"tools":[{"name":"read_alpha","input_schema":{"type":"object"}},{"name":"read_beta","input_schema":{"type":"object"}}]%s
+	}`
+	liteSelection := func() model.Selection {
+		selection := normalSelection()
+		selection.Model.Slug = "gpt-5.6-sol"
+		selection.Model.UseResponsesLite = true
+		selection.Model.SupportsParallelToolCalls = true
+		return selection
+	}
+
+	t.Run("parallel wanted uses full Responses protocol", func(t *testing.T) {
+		result := translateOK(t, decodeRequest(t, fmt.Sprintf(body, "")), liteSelection(), Options{})
+		if !result.Request.ParallelToolCalls {
+			t.Fatal("ParallelToolCalls = false, want true")
+		}
+		if result.Request.Instructions != "instructions" || len(result.Request.Tools) != 2 {
+			t.Fatalf("instructions=%q tools=%d, want top-level Responses fields", result.Request.Instructions, len(result.Request.Tools))
+		}
+		// An empty reasoning context is what keeps the Lite request header off.
+		if result.Request.Reasoning == nil || result.Request.Reasoning.Context != "" {
+			t.Fatalf("reasoning = %#v, want no Lite context", result.Request.Reasoning)
+		}
+		for _, item := range result.Request.Input {
+			if _, isLite := item.(codexwire.AdditionalTools); isLite {
+				t.Fatal("input still carries the Lite additional_tools carrier")
+			}
+		}
+	})
+
+	t.Run("parallel disabled stays on Lite", func(t *testing.T) {
+		result := translateOK(t, decodeRequest(t, fmt.Sprintf(body, `,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}`)), liteSelection(), Options{})
+		if result.Request.ParallelToolCalls || result.Request.Reasoning == nil ||
+			result.Request.Reasoning.Context != codexwire.ReasoningContextAllTurns {
+			t.Fatalf("expected Lite request, got parallel=%v reasoning=%#v", result.Request.ParallelToolCalls, result.Request.Reasoning)
+		}
+	})
+
+	t.Run("no tools stays on Lite", func(t *testing.T) {
+		result := translateOK(t, decodeRequest(t, `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"go"}]}`), liteSelection(), Options{})
+		if result.Request.Reasoning == nil || result.Request.Reasoning.Context != codexwire.ReasoningContextAllTurns {
+			t.Fatalf("expected Lite request, got reasoning=%#v", result.Request.Reasoning)
+		}
+	})
 }
