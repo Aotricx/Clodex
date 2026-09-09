@@ -38,10 +38,12 @@ go.work.sum
 # .vscode/
 
 # Codev / AI-agent tooling — internal to this maintainer's workflow, not needed
-# by forks. Kept locally, never committed.
+# by forks. Kept locally, never committed. .cursor/mcp.json carries a loopback
+# bearer token, so the whole Cursor dir stays out of git.
 /.codev/
 /.claude/
 /.codex/
+/.cursor/
 /plans/
 /AGENTS.md
 /CLAUDE.md
