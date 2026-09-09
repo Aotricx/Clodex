@@ -169,12 +169,12 @@ at runtime; below is the compiled offline fallback used when discovery is unavai
 | `gpt-5.6-terra` | `medium` | low, medium, high, xhigh, max, ultra | yes |
 | `gpt-5.6-luna` | `medium` | low, medium, high, xhigh, max | yes |
 | `gpt-5.5` | `xhigh` | low, medium, high, xhigh | yes |
-| `gpt-5.4` | `medium` | low, medium, high, xhigh | yes |
-| `gpt-5.4-mini` | `medium` | low, medium, high, xhigh | no |
+| `gpt-reserve` | `medium` | low, medium, high, xhigh, max | yes |
+| `codex-auto-review` | `medium` | low, medium, high, xhigh, max | yes |
 
-Every fallback model advertises a 272,000-token context window. A seventh entry,
-`codex-auto-review`, is marked `visibility: hide` upstream; Clodex does not filter on that field,
-so it is still listed and selectable. For your account's real list, ask a running proxy:
+Every fallback model advertises a 272,000-token context window. `gpt-reserve` and
+`codex-auto-review` are marked `visibility: hide` upstream; Clodex does not filter on that field,
+so they are still listed and selectable. For your account's real list, ask a running proxy:
 
 ```sh
 curl -s http://127.0.0.1:8484/v1/models | jq -r '.data[].id'
@@ -190,7 +190,7 @@ Clodex decodes them back to canonical GPT ids — a shim, not an alias policy or
 | --- | --- | --- |
 | `CLODEX_PORT` | `8484` | Loopback listen port |
 | `CLODEX_MODEL` | `gpt-5.6-sol:medium` | Main model |
-| `CLODEX_SMALL_FAST_MODEL` | `gpt-5.4-mini:low` | Small/fast model |
+| `CLODEX_SMALL_FAST_MODEL` | `gpt-5.6-luna:low` | Small/fast model |
 | `CLODEX_DEBUG_WIRE` | `false` | Wire dumps are failure-triggered and redacted, written under `~/.clodex/wire`; `true` (or `--debug-wire`) records **every** request/response pair |
 | `CLODEX_EMPTY_RETRIES` | `10` | Retries for an empty upstream completion |
 | `CLODEX_TRANSIENT_RETRIES` | `3` | Retries for a transient upstream failure |
@@ -242,8 +242,13 @@ Behavior you can observe. [`docs/EVIDENCE.md`](docs/EVIDENCE.md) is the full eng
   semantic output, so a terminal-only retry can still return an honest 503; that gap carries no pings.
 - **Image URLs are counted as URL text**, because offline counting cannot inspect remote dimensions.
   Decodable inline images use Codex's 32-pixel patch geometry.
-- **`gpt-5.6-sol` is pinned to Responses Lite**, which sends `parallel_tool_calls: false`, so Claude
-  Code may choose sequential tool turns. Clodex does not override backend/model tool policy.
+- **Parallel tool calls force a request off Responses Lite.** The backend rejects the Lite path
+  unless `parallel_tool_calls` is `false` (`X-OpenAI-Internal-Codex-Responses-Lite requires
+  \`parallel_tool_calls\` to be false`), so a request that offers tools and has not set
+  `disable_parallel_tool_use` is sent over the full Responses protocol instead, which preserves
+  parallel tool calls on every model. Requests with no tools, or with parallel tool use disabled,
+  still use Lite. Clodex enables the capability but does not override the model's choice — a model
+  may still answer with sequential tool turns.
 
 ## Security
 
