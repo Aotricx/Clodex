@@ -138,6 +138,25 @@ func TestCircuitBreakerClosedOpenHalfOpen(t *testing.T) {
 	}
 }
 
+func TestFailedTwiceWhileOpenKeepsFirstOpenUntil(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	controller := newController(t, clock, func() float64 { return 0 })
+	controller.Failed(true)
+	controller.Failed(true)
+	first := controller.Snapshot()
+	if first.State != StateOpen || first.OpenUntil == nil {
+		t.Fatalf("open snapshot = %+v", first)
+	}
+	deadline := *first.OpenUntil
+
+	clock.advance(time.Second)
+	controller.Failed(true)
+	second := controller.Snapshot()
+	if second.State != StateOpen || second.OpenUntil == nil || !second.OpenUntil.Equal(deadline) {
+		t.Fatalf("openUntil after Failed while Open = %v, want %s", second.OpenUntil, deadline)
+	}
+}
+
 func TestPermanentFailureDoesNotTripCircuit(t *testing.T) {
 	clock := newFakeClock(time.Now())
 	controller := newController(t, clock, func() float64 { return 0 })

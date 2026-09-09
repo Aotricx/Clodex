@@ -368,12 +368,9 @@ func (m *Manager) loadMatchingCache() (*Catalog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex catalog: load cache: %w", err)
 	}
-	if catalog.ClientVersion != ClientVersion {
-		return nil, fmt.Errorf("resolve Codex catalog: cache client version %q does not match %q", catalog.ClientVersion, ClientVersion)
-	}
-	if catalog.Backend != BackendURL {
-		return nil, fmt.Errorf("resolve Codex catalog: cache backend %q does not match %q", catalog.Backend, BackendURL)
-	}
+	// Identity is only a freshness gate. A parseable, validated cache with a
+	// mismatched client_version or backend is still preferred over embedded
+	// fallback when live discovery fails.
 	return &catalog, nil
 }
 

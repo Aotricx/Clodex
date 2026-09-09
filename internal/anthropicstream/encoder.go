@@ -89,10 +89,13 @@ func (e *Encoder) Encode(event reducer.Event) error {
 	}
 }
 
-// Ping emits Anthropic's idle heartbeat frame.
+// Ping emits Anthropic's idle heartbeat frame after message_start.
 func (e *Encoder) Ping() error {
 	if e.finished {
 		return ErrStreamFinished
+	}
+	if err := e.ensureStart(bufferedUsage{}); err != nil {
+		return err
 	}
 	return e.emit("ping", struct {
 		Type string `json:"type"`
@@ -101,7 +104,7 @@ func (e *Encoder) Ping() error {
 
 func (e *Encoder) MatchedStop() string { return e.matched }
 
-func (e *Encoder) ensureStart() error {
+func (e *Encoder) ensureStart(usage bufferedUsage) error {
 	if e.started {
 		return nil
 	}
@@ -116,7 +119,7 @@ func (e *Encoder) ensureStart() error {
 			Content      []json.RawMessage `json:"content"`
 			StopReason   *string           `json:"stop_reason"`
 			StopSequence *string           `json:"stop_sequence"`
-			Usage        streamStartUsage  `json:"usage"`
+			Usage        bufferedUsage     `json:"usage"`
 		} `json:"message"`
 	}{Type: "message_start"}
 	payload.Message.ID = e.id
@@ -124,14 +127,8 @@ func (e *Encoder) ensureStart() error {
 	payload.Message.Role = "assistant"
 	payload.Message.Model = e.model
 	payload.Message.Content = []json.RawMessage{}
-	// Responses supplies authoritative usage only in its terminal object.
-	// Final message_delta carries exact totals; start remains protocol zero.
+	payload.Message.Usage = usage
 	return e.emit("message_start", payload)
-}
-
-type streamStartUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
 }
 
 func (e *Encoder) contentStart(event reducer.Event) error {
@@ -141,7 +138,7 @@ func (e *Encoder) contentStart(event reducer.Event) error {
 	if _, exists := e.open[event.Index]; exists {
 		return fmt.Errorf("%w: content index %d opened twice", ErrInvalidEvent, event.Index)
 	}
-	if err := e.ensureStart(); err != nil {
+	if err := e.ensureStart(bufferedUsage{}); err != nil {
 		return err
 	}
 	var block any
@@ -193,7 +190,7 @@ func (e *Encoder) contentDelta(event reducer.Event) error {
 		}
 		return fmt.Errorf("%w: delta for unopened index %d", ErrInvalidEvent, event.Index)
 	}
-	if e.matched != "" {
+	if e.matched != "" && event.Index >= e.matchAt {
 		return nil
 	}
 	text := event.Delta.Text
@@ -259,10 +256,6 @@ func (e *Encoder) contentStop(event reducer.Event) error {
 		}
 		return fmt.Errorf("%w: stop for unopened index %d", ErrInvalidEvent, event.Index)
 	}
-	if e.matched != "" && event.Index > e.matchAt {
-		delete(e.open, event.Index)
-		return nil
-	}
 	if state.kind == reducer.BlockText && e.matched == "" {
 		result := state.scanner.Finish()
 		if result.Text != "" {
@@ -285,7 +278,7 @@ func (e *Encoder) terminal(terminal *reducer.Terminal) error {
 	if len(e.open) != 0 {
 		return fmt.Errorf("%w: terminal with %d open blocks", ErrInvalidEvent, len(e.open))
 	}
-	if err := e.ensureStart(); err != nil {
+	if err := e.ensureStart(mapUsage(terminal.Usage)); err != nil {
 		return err
 	}
 	reason := terminal.StopReason

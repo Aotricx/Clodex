@@ -259,6 +259,17 @@ func (service *MessagesService) stream(writer http.ResponseWriter, request *http
 		case <-request.Context().Done():
 			cancel()
 			<-done
+			if !committed {
+				err := request.Context().Err()
+				select {
+				case signal := <-signals:
+					if signal.err != nil {
+						err = signal.err
+					}
+				default:
+				}
+				service.writeUncommittedError(writer, err)
+			}
 			return
 		case <-heartbeat:
 			if err := encoder.Ping(); err != nil {
@@ -308,6 +319,9 @@ func (service *MessagesService) stream(writer http.ResponseWriter, request *http
 			if signal.result != nil {
 				service.recordReducerWarnings(signal.result.Response.Warnings)
 				service.recordTiming(received, firstByteAt, signal.result)
+			}
+			if !committed {
+				service.writeUncommittedError(writer, request.Context().Err())
 			}
 			return
 		}
@@ -389,12 +403,23 @@ func (service *MessagesService) recordReducerWarnings(warnings []reducer.Warning
 }
 
 func (service *MessagesService) writeAnyError(writer http.ResponseWriter, err error) {
+	if isRequestTooLarge(err) {
+		writeRequestTooLarge(writer)
+		return
+	}
 	var requestError *anthropic.RequestError
 	if errors.As(err, &requestError) {
 		writeJSON(writer, requestError.StatusCode, requestError.Response, false)
 		return
 	}
 	writeError(writer, http.StatusInternalServerError, "api_error", redact.Text(err.Error()))
+}
+
+func (service *MessagesService) writeUncommittedError(writer http.ResponseWriter, err error) {
+	if err == nil {
+		err = context.Canceled
+	}
+	service.writeEngineError(writer, err)
 }
 
 func (service *MessagesService) writeEngineError(writer http.ResponseWriter, err error) {

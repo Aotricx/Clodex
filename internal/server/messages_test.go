@@ -88,6 +88,51 @@ func TestMessagesFailureBeforeSemanticOutputPreservesHTTPError(t *testing.T) {
 	}
 }
 
+func TestMessagesPreCommitCancelWritesJSONErrorNotEmpty200(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(map[bool]string{false: "buffered", true: "streaming"}[streaming], func(t *testing.T) {
+			started := make(chan struct{})
+			transport := &hangUntilCancelTransport{started: started}
+			service := testMessagesService(t, transport)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			body := `{"model":"gpt-5.6-luna:low","max_tokens":1,"messages":[{"role":"user","content":"x"}],"stream":` + map[bool]string{false: "false", true: "true"}[streaming] + `}`
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)).WithContext(ctx)
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				service.ServeHTTP(response, request)
+				close(done)
+			}()
+			select {
+			case <-started:
+			case <-done:
+				t.Fatalf("handler returned before transport started: %d %s", response.Code, response.Body.String())
+			case <-time.After(time.Second):
+				t.Fatal("transport never started")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("handler did not return after cancel")
+			}
+			result := response.Result()
+			defer result.Body.Close()
+			if result.StatusCode == http.StatusOK && response.Body.Len() == 0 {
+				t.Fatal("pre-commit cancel fell off ServeHTTP with empty 200")
+			}
+			if response.Code != http.StatusInternalServerError && response.Code != 499 {
+				t.Fatalf("status = %d body=%s, want 499 or 500 Anthropic JSON", response.Code, response.Body.String())
+			}
+			assertAnthropicError(t, response, response.Code, "api_error")
+			if strings.Contains(response.Body.String(), "message_start") {
+				t.Fatalf("committed after pre-commit cancel: %s", response.Body.String())
+			}
+		})
+	}
+}
+
 func TestMessagesEmptyCompletionNeverCommitsStreaming200(t *testing.T) {
 	transport := &messageTransport{body: []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0,\"total_tokens\":1}}}\n\n")}
 	service := testMessagesService(t, transport)
@@ -246,6 +291,16 @@ func (transport *messageTransport) Requests() []codexwire.Request {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	return append([]codexwire.Request(nil), transport.requests...)
+}
+
+type hangUntilCancelTransport struct {
+	started chan struct{}
+}
+
+func (transport *hangUntilCancelTransport) Stream(ctx context.Context, _ upstream.Session, _ codexwire.Request) (*http.Response, error) {
+	close(transport.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 type lingeringMessageTransport struct {

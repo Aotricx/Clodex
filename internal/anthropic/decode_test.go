@@ -516,3 +516,117 @@ func TestDecodeRejectsToolBlocksInSystemMessage(t *testing.T) {
 		t.Fatal("DecodeRequest accepted tool_use in system content, want error")
 	}
 }
+
+// Claude Code PDF Read emits type:document with a base64 application/pdf source,
+// often nested in tool_result. cache_control:null is treated as absent.
+const documentPDFFixture = `{
+	"model":"claude-opus-4-1",
+	"max_tokens":1024,
+	"messages":[{"role":"user","content":[
+		{"type":"text","text":"Read this PDF"},
+		{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQ="},"title":"notes.pdf","cache_control":null},
+		{"type":"document","source":{"type":"url","url":"https://example.com/spec.pdf"}},
+		{"type":"tool_result","tool_use_id":"toolu_read_pdf","content":[
+			{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQ="},"cache_control":null}
+		]},
+		{"type":"search_result","source":"https://example.com/page","title":"Example","content":[{"type":"text","text":"snippet"}],"cache_control":null},
+		{"type":"future_block","value":7}
+	]}]
+}`
+
+func TestDecodeRequestDecodesDocumentPDFAndSearchResultAsFirstClass(t *testing.T) {
+	req := decodeOK(t, documentPDFFixture)
+	blocks := req.Messages[0].Content
+	if len(blocks) != 6 {
+		t.Fatalf("block count = %d, want 6: %#v", len(blocks), blocks)
+	}
+
+	pdf := blocks[1]
+	if pdf.Type != "document" || pdf.Document == nil || pdf.Unknown() {
+		t.Fatalf("document block = %#v, want first-class Document (not Unknown)", pdf)
+	}
+	if got := pdf.Document.Source; got.Type != "base64" || got.MediaType != "application/pdf" || got.Data != "JVBERi0xLjQ=" || got.URL != "" {
+		t.Fatalf("base64 document source = %#v", got)
+	}
+	if pdf.Document.Title != "notes.pdf" {
+		t.Fatalf("document title = %q, want notes.pdf", pdf.Document.Title)
+	}
+	if pdf.Document.CacheControl != nil {
+		t.Fatalf("cache_control:null should be absent, got %#v", pdf.Document.CacheControl)
+	}
+	if !json.Valid(pdf.Raw) || !strings.Contains(string(pdf.Raw), `"type":"document"`) {
+		t.Fatalf("document raw = %s", pdf.Raw)
+	}
+
+	urlDoc := blocks[2]
+	if urlDoc.Document == nil || urlDoc.Document.Source.Type != "url" || urlDoc.Document.Source.URL != "https://example.com/spec.pdf" {
+		t.Fatalf("URL document = %#v", urlDoc.Document)
+	}
+
+	nested := blocks[3].ToolResult
+	if nested == nil || len(nested.Content) != 1 || nested.Content[0].Document == nil || nested.Content[0].Unknown() {
+		t.Fatalf("tool_result nested document = %#v", nested)
+	}
+	if got := nested.Content[0].Document.Source; got.Type != "base64" || got.MediaType != "application/pdf" || got.Data != "JVBERi0xLjQ=" {
+		t.Fatalf("nested document source = %#v", got)
+	}
+	if nested.Content[0].Document.CacheControl != nil {
+		t.Fatalf("nested cache_control:null should be absent, got %#v", nested.Content[0].Document.CacheControl)
+	}
+
+	search := blocks[4]
+	if search.Type != "search_result" || search.SearchResult == nil || search.Unknown() {
+		t.Fatalf("search_result block = %#v, want first-class SearchResult (not Unknown)", search)
+	}
+	if search.SearchResult.Source != "https://example.com/page" || search.SearchResult.Title != "Example" {
+		t.Fatalf("search_result identity = %#v", search.SearchResult)
+	}
+	if len(search.SearchResult.Content) != 1 || search.SearchResult.Content[0].Text == nil || search.SearchResult.Content[0].Text.Text != "snippet" {
+		t.Fatalf("search_result content = %#v", search.SearchResult)
+	}
+	if search.SearchResult.CacheControl != nil {
+		t.Fatalf("search_result cache_control:null should be absent, got %#v", search.SearchResult.CacheControl)
+	}
+
+	if !blocks[5].Unknown() || blocks[5].Type != "future_block" {
+		t.Fatalf("future block = %#v, want unknown", blocks[5])
+	}
+}
+
+func TestDecodeRequestRejectsDocumentAndSearchResultInSystemAndAssistant(t *testing.T) {
+	pdf := `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQ="}}`
+	search := `{"type":"search_result","source":"https://example.com/page","title":"Example","content":[{"type":"text","text":"snippet"}]}`
+	for _, body := range []string{
+		`{"model":"m","max_tokens":1,"system":[` + pdf + `],"messages":[{"role":"user","content":"x"}]}`,
+		`{"model":"m","max_tokens":1,"messages":[{"role":"system","content":[` + pdf + `]}]}`,
+		`{"model":"m","max_tokens":1,"messages":[{"role":"assistant","content":[` + pdf + `]}]}`,
+		`{"model":"m","max_tokens":1,"system":[` + search + `],"messages":[{"role":"user","content":"x"}]}`,
+		`{"model":"m","max_tokens":1,"messages":[{"role":"assistant","content":[` + search + `]}]}`,
+	} {
+		decodeInvalid(t, body)
+	}
+}
+
+func TestDecodeRequestRejectsMalformedDocumentSources(t *testing.T) {
+	tests := []struct {
+		name  string
+		block string
+	}{
+		{"missing source", `{"type":"document"}`},
+		{"missing source type", `{"type":"document","source":{"media_type":"application/pdf","data":"JVBERi0xLjQ="}}`},
+		{"unsupported source type", `{"type":"document","source":{"type":"file","file_id":"file_1"}}`},
+		{"missing media type", `{"type":"document","source":{"type":"base64","data":"JVBERi0xLjQ="}}`},
+		{"unsupported media type", `{"type":"document","source":{"type":"base64","media_type":"application/msword","data":"JVBERi0xLjQ="}}`},
+		{"missing base64 data", `{"type":"document","source":{"type":"base64","media_type":"application/pdf"}}`},
+		{"invalid alphabet", `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"%%%"}}`},
+		{"empty data", `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":""}}`},
+		{"missing URL", `{"type":"document","source":{"type":"url"}}`},
+		{"relative URL", `{"type":"document","source":{"type":"url","url":"/doc.pdf"}}`},
+		{"FTP URL", `{"type":"document","source":{"type":"url","url":"ftp://example.com/a.pdf"}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			decodeInvalid(t, requestWithBlock(tc.block))
+		})
+	}
+}

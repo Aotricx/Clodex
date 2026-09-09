@@ -40,7 +40,15 @@ var claudeEnvironmentKeys = []string{
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW",
 }
 
-var removedClaudeEnvironmentKeys = []string{"CLAUDE_CODE_MAX_CONTEXT_TOKENS"}
+// Dropped so Claude Code cannot bypass the loopback proxy with a real
+// Anthropic key, unix socket, or Bedrock/Vertex cloud backend.
+var removedClaudeEnvironmentKeys = []string{
+	"CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_UNIX_SOCKET",
+	"CLAUDE_CODE_USE_BEDROCK",
+	"CLAUDE_CODE_USE_VERTEX",
+}
 
 // Arguments contains launcher overrides and untouched Claude Code arguments.
 type Arguments struct {
@@ -300,18 +308,70 @@ func normalizeDependencies(dependencies Dependencies) (Dependencies, error) {
 }
 
 func replaceEnvironment(environment []string, overrides map[string]string) []string {
-	result := make([]string, 0, len(environment)+len(claudeEnvironmentKeys))
+	result := make([]string, 0, len(environment)+len(claudeEnvironmentKeys)+1)
+	hasProxy := false
+	noProxyIndex := -1
 	for _, entry := range environment {
-		key, _, found := strings.Cut(entry, "=")
+		key, value, found := strings.Cut(entry, "=")
 		if found && isClaudeEnvironmentKey(key) {
 			continue
+		}
+		if found && isHTTPProxyKey(key) && value != "" {
+			hasProxy = true
+		}
+		if found && isNoProxyKey(key) {
+			noProxyIndex = len(result)
 		}
 		result = append(result, entry)
 	}
 	for _, key := range claudeEnvironmentKeys {
 		result = append(result, key+"="+overrides[key])
 	}
+	if hasProxy {
+		return ensureLoopbackNoProxy(result, noProxyIndex)
+	}
 	return result
+}
+
+func isHTTPProxyKey(key string) bool {
+	return strings.EqualFold(key, "HTTP_PROXY") || strings.EqualFold(key, "HTTPS_PROXY")
+}
+
+func isNoProxyKey(key string) bool {
+	return strings.EqualFold(key, "NO_PROXY")
+}
+
+func ensureLoopbackNoProxy(environment []string, noProxyIndex int) []string {
+	if noProxyIndex >= 0 {
+		key, value, _ := strings.Cut(environment[noProxyIndex], "=")
+		environment[noProxyIndex] = key + "=" + mergeLoopbackNoProxy(value)
+		return environment
+	}
+	return append(environment, "NO_PROXY="+mergeLoopbackNoProxy(""))
+}
+
+func mergeLoopbackNoProxy(existing string) string {
+	parts := strings.Split(existing, ",")
+	seen := make(map[string]struct{}, len(parts)+2)
+	kept := make([]string, 0, len(parts)+2)
+	for _, part := range parts {
+		host := strings.TrimSpace(part)
+		if host == "" {
+			continue
+		}
+		lower := strings.ToLower(host)
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		kept = append(kept, host)
+	}
+	for _, host := range []string{"127.0.0.1", "localhost"} {
+		if _, ok := seen[strings.ToLower(host)]; !ok {
+			kept = append(kept, host)
+		}
+	}
+	return strings.Join(kept, ",")
 }
 
 func isClaudeEnvironmentKey(key string) bool {

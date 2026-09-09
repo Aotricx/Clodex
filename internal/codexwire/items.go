@@ -119,6 +119,31 @@ func (i InputImage) MarshalJSON() ([]byte, error) {
 	}{Type: "input_image", ImageURL: i.ImageURL, Detail: i.Detail})
 }
 
+// InputFile is PDF or other document content on the Responses wire.
+type InputFile struct {
+	Filename string
+	FileData string
+	FileURL  string
+}
+
+func (InputFile) contentItem() {}
+
+func (InputFile) functionOutputContentItem() {}
+
+func (f InputFile) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type     string `json:"type"`
+		Filename string `json:"filename,omitempty"`
+		FileData string `json:"file_data,omitempty"`
+		FileURL  string `json:"file_url,omitempty"`
+	}{
+		Type:     "input_file",
+		Filename: f.Filename,
+		FileData: f.FileData,
+		FileURL:  f.FileURL,
+	})
+}
+
 // OutputText is assistant text retained in request history.
 type OutputText struct {
 	Text string

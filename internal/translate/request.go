@@ -9,6 +9,7 @@ import (
 	"hash"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/Aotricx/Clodex/internal/anthropic"
 	"github.com/Aotricx/Clodex/internal/codexwire"
@@ -310,19 +311,63 @@ func (t *translator) webSearchCall(block anthropic.ContentBlock) (codexwire.WebS
 	if json.Unmarshal(object["input"], &input) != nil {
 		return codexwire.WebSearchCall{}, false
 	}
-	queryRaw, ok := input["query"]
+	query, ok := webSearchQuery(input)
 	if !ok {
 		return codexwire.WebSearchCall{}, false
 	}
-	var query string
-	if !jsonString(queryRaw, &query) {
-		return codexwire.WebSearchCall{}, false
-	}
 	return codexwire.WebSearchCall{
-		ID:     id,
+		ID:     invertServerToolUseID(id),
 		Status: "completed",
 		Action: codexwire.WebSearchAction{Type: "search", Query: query},
 	}, true
+}
+
+const serverToolUsePrefix = "srvtoolu_"
+
+// invertServerToolUseID undoes reducer.serverToolUseID when the Anthropic id is
+// exactly the rewritten form: prefix srvtoolu_ plus a suffix that already
+// contains only letters, numbers, and underscores. Sanitization of other
+// characters to '_' is not uniquely reversible, so those ids pass through.
+func invertServerToolUseID(id string) string {
+	if !strings.HasPrefix(id, serverToolUsePrefix) {
+		return id
+	}
+	suffix := id[len(serverToolUsePrefix):]
+	if suffix == "" {
+		return id
+	}
+	for _, char := range suffix {
+		if !unicode.IsLetter(char) && !unicode.IsNumber(char) && char != '_' {
+			return id
+		}
+	}
+	return suffix
+}
+
+func webSearchQuery(input map[string]json.RawMessage) (string, bool) {
+	var query string
+	if raw, ok := input["query"]; ok {
+		if !jsonString(raw, &query) {
+			return "", false
+		}
+	}
+	if query != "" {
+		return query, true
+	}
+	raw, ok := input["queries"]
+	if !ok {
+		return "", false
+	}
+	var queries []string
+	if json.Unmarshal(raw, &queries) != nil {
+		return "", false
+	}
+	for _, value := range queries {
+		if value != "" {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func jsonString(raw json.RawMessage, dest *string) bool {
@@ -424,6 +469,10 @@ func (t *translator) userMessage(out *[]codexwire.InputItem, blocks []anthropic.
 			t.mapped()
 			t.warnImageUnknownFields(block)
 			parts = append(parts, t.image(block.Image))
+		case block.Document != nil:
+			t.mapped()
+			t.warnUnknownBlockFields(block.Raw, "type", "source", "title", "cache_control")
+			parts = append(parts, t.document(block.Document))
 		case block.ToolResult != nil:
 			t.mapped()
 			t.warnUnknownBlockFields(block.Raw, "type", "tool_use_id", "content", "is_error", "cache_control")
@@ -517,6 +566,10 @@ func (t *translator) toolResult(result *anthropic.ToolResultBlock) codexwire.Fun
 			t.mapped()
 			t.warnImageUnknownFields(block)
 			items = append(items, t.image(block.Image))
+		case block.Document != nil:
+			t.mapped()
+			t.warnUnknownBlockFields(block.Raw, "type", "source", "title", "cache_control")
+			items = append(items, t.document(block.Document))
 		default:
 			t.warn(WarningUnknownContentBlock)
 		}
@@ -538,6 +591,20 @@ func (t *translator) image(image *anthropic.ImageBlock) codexwire.InputImage {
 		imageURL = "data:" + image.Source.MediaType + ";base64," + image.Source.Data
 	}
 	return codexwire.InputImage{ImageURL: imageURL, Detail: codexwire.ImageDetailAuto}
+}
+
+func (t *translator) document(document *anthropic.DocumentBlock) codexwire.InputFile {
+	filename := strings.TrimSpace(document.Title)
+	if filename == "" {
+		filename = "document.pdf"
+	}
+	if document.Source.Type == "url" {
+		return codexwire.InputFile{Filename: filename, FileURL: document.Source.URL}
+	}
+	return codexwire.InputFile{
+		Filename: filename,
+		FileData: "data:" + document.Source.MediaType + ";base64," + document.Source.Data,
+	}
 }
 
 func (t *translator) responsesLiteInput(instructions string, tools []codexwire.Tool, input []codexwire.InputItem) []codexwire.InputItem {

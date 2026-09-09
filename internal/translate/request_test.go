@@ -354,6 +354,159 @@ func TestTranslateRequestUnknownSemanticItemsAreWarningAccounted(t *testing.T) {
 	}
 }
 
+func TestTranslateRequestInvertsServerToolUseWebSearchID(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"messages":[{"role":"assistant","content":[
+			{"type":"server_tool_use","id":"srvtoolu_ws_1","name":"web_search","input":{"query":"golang"}}
+		]}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	wire, err := json.Marshal(result.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"type":"web_search_call","id":"ws_1"`) {
+		t.Fatalf("assistant server_tool_use srvtoolu_ws_1 must emit wire id ws_1: %s", wire)
+	}
+	if strings.Contains(string(wire), `"id":"srvtoolu_ws_1"`) {
+		t.Fatalf("rewritten Anthropic id leaked onto wire: %s", wire)
+	}
+}
+
+func TestTranslateRequestPassesThroughNonRewrittenWebSearchIDs(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{id: "s", want: `"id":"s"`},
+		{id: "ws_1", want: `"id":"ws_1"`},
+		{id: "srvtoolu_ws-1", want: `"id":"srvtoolu_ws-1"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			req := decodeRequest(t, `{
+				"model":"m","max_tokens":1,
+				"messages":[{"role":"assistant","content":[
+					{"type":"server_tool_use","id":`+mustJSON(t, tc.id)+`,"name":"web_search","input":{"query":"x"}}
+				]}]
+			}`)
+			result := translateOK(t, req, normalSelection(), Options{})
+			wire, err := json.Marshal(result.Request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(wire), `"type":"web_search_call"`) || !strings.Contains(string(wire), tc.want) {
+				t.Fatalf("id %q wire = %s, want %s", tc.id, wire, tc.want)
+			}
+		})
+	}
+}
+
+func TestTranslateRequestMapsDocumentPDFToInputFile(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"messages":[{"role":"user","content":[
+			{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQ="},"title":"notes.pdf"},
+			{"type":"text","text":"summarize"},
+			{"type":"document","source":{"type":"url","url":"https://example.com/spec.pdf"}}
+		]}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	wire, err := json.Marshal(result.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(wire)
+	if warningCount(result.Warnings, WarningUnknownContentBlock) != 0 {
+		t.Fatalf("document blocks were dropped as unknown: warnings=%#v wire=%s", result.Warnings, got)
+	}
+	if !strings.Contains(got, `"type":"input_file"`) || !strings.Contains(got, `"filename":"notes.pdf"`) {
+		t.Fatalf("base64 document missing from wire: %s", got)
+	}
+	if !strings.Contains(got, `"file_data":"data:application/pdf;base64,JVBERi0xLjQ="`) {
+		t.Fatalf("base64 document file_data missing: %s", got)
+	}
+	if !strings.Contains(got, `"file_url":"https://example.com/spec.pdf"`) {
+		t.Fatalf("URL document missing from wire: %s", got)
+	}
+	if !strings.Contains(got, `"type":"input_text","text":"summarize"`) {
+		t.Fatalf("sibling text missing: %s", got)
+	}
+}
+
+func TestTranslateRequestMapsNestedDocumentInToolResult(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"messages":[{"role":"user","content":[
+			{"type":"tool_result","tool_use_id":"call_1","content":[
+				{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0xLjQ="},"title":"tool.pdf"}
+			]}
+		]}]
+	}`)
+	result := translateOK(t, req, normalSelection(), Options{})
+	wire, err := json.Marshal(result.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(wire)
+	if warningCount(result.Warnings, WarningUnknownContentBlock) != 0 {
+		t.Fatalf("nested document dropped: warnings=%#v wire=%s", result.Warnings, got)
+	}
+	if !strings.Contains(got, `"type":"input_file"`) || !strings.Contains(got, `"filename":"tool.pdf"`) {
+		t.Fatalf("tool_result document missing: %s", got)
+	}
+}
+
+func TestTranslateRequestMapsWebSearchQueriesWhenQueryAbsent(t *testing.T) {
+	req := decodeRequest(t, `{
+		"model":"m","max_tokens":1,
+		"messages":[{"role":"assistant","content":[
+			{"type":"server_tool_use","id":"srvtoolu_ws_1","name":"web_search","input":{"queries":["golang","docs"]}}
+		]}]
+	}`)
+	if len(req.Messages) != 1 || len(req.Messages[0].Content) != 1 {
+		t.Fatalf("decoded messages = %#v", req.Messages)
+	}
+	block := req.Messages[0].Content[0]
+	if got, ok := webSearchQueryFromBlock(t, block); !ok || got != "golang" {
+		t.Fatalf("webSearchQuery from decoded block = %q ok=%v raw=%s", got, ok, block.Raw)
+	}
+	result := translateOK(t, req, normalSelection(), Options{})
+	wire, err := json.Marshal(result.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"type":"web_search_call","id":"ws_1"`) {
+		t.Fatalf("queries input should map to web_search_call: %s warnings=%#v raw=%s", wire, result.Warnings, block.Raw)
+	}
+	if !strings.Contains(string(wire), `"query":"golang"`) {
+		t.Fatalf("first queries entry should map onto action.query when possible: %s", wire)
+	}
+}
+
+func webSearchQueryFromBlock(t *testing.T, block anthropic.ContentBlock) (string, bool) {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if json.Unmarshal(block.Raw, &object) != nil {
+		return "", false
+	}
+	var input map[string]json.RawMessage
+	if json.Unmarshal(object["input"], &input) != nil {
+		return "", false
+	}
+	return webSearchQuery(input)
+}
+
+func mustJSON(t *testing.T, value string) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 func TestTranslateRequestMalformedWebSearchServerToolUseStaysUnknown(t *testing.T) {
 	for _, block := range []string{
 		`{"type":"server_tool_use","id":"s","name":"web_search","input":["not","object"]}`,

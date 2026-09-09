@@ -16,6 +16,13 @@ import (
 
 const liveModel = "gpt-5.6-luna:low"
 
+func TestLiveSmokeCheapModelIsOnLiveCatalog(t *testing.T) {
+	const want = "gpt-5.6-luna:low"
+	if liveModel != want {
+		t.Fatalf("liveModel=%q want %q (gpt-5.4-mini:low is absent from the live Codex catalog)", liveModel, want)
+	}
+}
+
 type anthropicResponse struct {
 	Content    []json.RawMessage `json:"content"`
 	StopReason string            `json:"stop_reason"`
@@ -50,7 +57,17 @@ func TestLiveProxySmoke(t *testing.T) {
 		if len(body.Data) < 7 || body.Data[0].ID == "" {
 			t.Fatalf("live model variants=%d first=%q", len(body.Data), firstID(body.Data))
 		}
-		t.Logf("live models=%d first=%s", len(body.Data), body.Data[0].ID)
+		found := false
+		for _, model := range body.Data {
+			if model.ID == liveModel {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("liveModel %q missing from catalog first=%q count=%d", liveModel, firstID(body.Data), len(body.Data))
+		}
+		t.Logf("live models=%d first=%s liveModel=%s", len(body.Data), body.Data[0].ID, liveModel)
 	})
 
 	textRequest := map[string]any{

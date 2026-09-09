@@ -37,6 +37,7 @@ type cliDependencies struct {
 	authLogin  func(context.Context, io.Writer) error
 	authDevice func(context.Context, io.Writer) error
 	authStatus func(context.Context, io.Writer) error
+	authLogout func(context.Context, io.Writer) error
 	claude     func(context.Context, []string, config.Config) error
 }
 
@@ -47,8 +48,7 @@ func main() {
 	if err == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "clodex: %s\n", redact.Text(err.Error()))
-	os.Exit(errorExitCode(err))
+	os.Exit(handleRunError(os.Stderr, err))
 }
 
 func run(ctx context.Context, args []string, dependencies cliDependencies) error {
@@ -70,8 +70,16 @@ func run(ctx context.Context, args []string, dependencies cliDependencies) error
 		}
 		return dependencies.serve(ctx, cfg)
 	case "auth":
+		if isHelpArg(args[1:]) {
+			_, err := io.WriteString(dependencies.stdout, usage)
+			return err
+		}
 		return runAuth(ctx, args[1:], dependencies)
 	case "claude":
+		if isHelpArg(args[1:]) {
+			_, err := io.WriteString(dependencies.stdout, usage)
+			return err
+		}
 		cfg, err := config.LoadServe(nil, dependencies.lookupEnv)
 		if err != nil {
 			return err
@@ -102,7 +110,7 @@ func run(ctx context.Context, args []string, dependencies cliDependencies) error
 
 func runAuth(ctx context.Context, args []string, dependencies cliDependencies) error {
 	if len(args) == 0 {
-		return errors.New("auth command is required: login, device, or status")
+		return errors.New("auth command is required: login, device, status, or logout")
 	}
 	if len(args) != 1 {
 		return fmt.Errorf("auth %s takes no arguments", args[0])
@@ -114,9 +122,15 @@ func runAuth(ctx context.Context, args []string, dependencies cliDependencies) e
 		return dependencies.authDevice(ctx, dependencies.stdout)
 	case "status":
 		return dependencies.authStatus(ctx, dependencies.stdout)
+	case "logout":
+		return dependencies.authLogout(ctx, dependencies.stdout)
 	default:
 		return fmt.Errorf("unknown auth command %q", args[0])
 	}
+}
+
+func isHelpArg(args []string) bool {
+	return len(args) == 1 && (args[0] == "--help" || args[0] == "-h")
 }
 
 func defaultDependencies() cliDependencies {
@@ -158,6 +172,17 @@ func defaultDependencies() cliDependencies {
 				return err
 			}
 			_, err = service.Status(ctx, commandauth.StatusText)
+			return err
+		},
+		authLogout: func(ctx context.Context, writer io.Writer) error {
+			service, err := newAuthService(writer)
+			if err != nil {
+				return err
+			}
+			if err := service.Logout(ctx); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(writer, "logged out")
 			return err
 		},
 		claude: runClaude,
@@ -209,10 +234,30 @@ func writeAuthenticated(writer io.Writer, summary auth.Summary) error {
 	return err
 }
 
+func handleRunError(stderr io.Writer, err error) int {
+	code := errorExitCode(err)
+	if errors.Is(err, context.Canceled) {
+		return code
+	}
+	_, _ = fmt.Fprintf(stderr, "clodex: %s\n", redact.Text(err.Error()))
+	return code
+}
+
 func errorExitCode(err error) int {
+	if errors.Is(err, context.Canceled) {
+		return 130
+	}
 	var exitError *exec.ExitError
-	if errors.As(err, &exitError) && exitError.ExitCode() >= 0 {
-		return exitError.ExitCode()
+	if errors.As(err, &exitError) {
+		if status, ok := exitError.Sys().(interface {
+			Signaled() bool
+			Signal() syscall.Signal
+		}); ok && status.Signaled() {
+			return 128 + int(status.Signal())
+		}
+		if exitError.ExitCode() >= 0 {
+			return exitError.ExitCode()
+		}
 	}
 	return 1
 }
@@ -224,6 +269,7 @@ Usage:
   clodex auth login
   clodex auth device
   clodex auth status
+  clodex auth logout
   clodex claude [--model MODEL] [--small-fast-model MODEL] [-- <claude args>]
   clodex version
   clodex licenses

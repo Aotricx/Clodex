@@ -57,10 +57,14 @@ func ParseEvent(raw []byte, capturedAt time.Time) (status.RateLimitSnapshot, err
 	if limitID == "" {
 		limitID = event.LimitName
 	}
-	if limitID == "" {
-		limitID = "codex"
+	snapshot := status.RateLimitSnapshot{
+		CapturedAt: capturedAt,
+		LimitID:    normalizeLimitID(limitID),
+		LimitName:  limitID,
 	}
-	snapshot := status.RateLimitSnapshot{CapturedAt: capturedAt, LimitID: normalizeLimitID(limitID)}
+	if snapshot.LimitID == "" {
+		snapshot.LimitID = "codex"
+	}
 	if event.RateLimits != nil {
 		snapshot.LimitReached = event.RateLimits.LimitReached
 		var err error
@@ -71,10 +75,7 @@ func ParseEvent(raw []byte, capturedAt time.Time) (status.RateLimitSnapshot, err
 			return status.RateLimitSnapshot{}, err
 		}
 	}
-	if event.Credits != nil {
-		if event.Credits.HasCredits == nil || event.Credits.Unlimited == nil {
-			return status.RateLimitSnapshot{}, errors.New("parse Codex rate-limit event: credits fields are incomplete")
-		}
+	if event.Credits != nil && event.Credits.HasCredits != nil && event.Credits.Unlimited != nil {
 		snapshot.Credits = &status.CreditsSummary{
 			HasCredits: *event.Credits.HasCredits,
 			Unlimited:  *event.Credits.Unlimited,
@@ -130,10 +131,10 @@ func ApplyResponseHeaders(headers http.Header, snapshot status.RateLimitSnapshot
 }
 
 func convertWindow(source *eventWindow) (*status.RateLimitWindow, error) {
-	if source == nil {
+	if source == nil || source.UsedPercent == nil {
 		return nil, nil
 	}
-	if source.UsedPercent == nil || math.IsNaN(*source.UsedPercent) || math.IsInf(*source.UsedPercent, 0) || *source.UsedPercent < 0 {
+	if math.IsNaN(*source.UsedPercent) || math.IsInf(*source.UsedPercent, 0) || *source.UsedPercent < 0 {
 		return nil, errors.New("parse Codex rate-limit event: invalid used_percent")
 	}
 	if negative(source.WindowMinutes) || negative(source.ResetAt) || negative(source.ResetAfterSeconds) {

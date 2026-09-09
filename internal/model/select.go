@@ -103,9 +103,11 @@ func Resolve(cat catalog.Catalog, requestedID, defaultID string, thinkingBudget 
 		return Selection{}, fmt.Errorf("invalid requested model ID %q: %w", requestedID, err)
 	}
 	selectedModel, recognized := cat.Find(requested.slug)
-	fallback := strings.HasPrefix(requested.slug, "claude-") || !recognized
+	fallback := !recognized && strings.HasPrefix(requested.slug, "claude-")
 	if fallback {
 		selectedModel = defaultModel
+	} else if !recognized {
+		return Selection{}, fmt.Errorf("requested model %q is not present in catalog", requested.slug)
 	}
 
 	effort := requested.effort

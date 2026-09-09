@@ -36,9 +36,11 @@ func (failure Failure) AnthropicResponse() anthropic.ErrorResponse {
 	}
 }
 
-// FromHTTP maps an upstream HTTP failure without changing its status or reason.
+// FromHTTP maps an upstream HTTP failure to an Anthropic-shaped error.
+// Quota and usage-cap bodies are remapped off HTTP 429 so clients that
+// retry 429/5xx do not loop forever. Throttle-only 429 stays retryable.
 func FromHTTP(status int, body []byte, headers http.Header) Failure {
-	message, overloaded := extractMessage(body)
+	message, overloaded, quota := extractMessage(body)
 	if message == "" {
 		message = fmt.Sprintf("Codex upstream returned HTTP %d", status)
 		if statusText := http.StatusText(status); statusText != "" {
@@ -47,17 +49,24 @@ func FromHTTP(status int, body []byte, headers http.Header) Failure {
 	}
 	message = boundMessage(redact.Text(message))
 
+	statusCode := status
 	errorType := typeForStatus(status, overloaded)
+	retryable := retryableStatus(status)
+	if quota {
+		statusCode = http.StatusForbidden
+		errorType = "permission_error"
+		retryable = false
+	}
 	retryAfter := ""
 	if headers != nil {
 		retryAfter = strings.TrimSpace(headers.Get("Retry-After"))
 	}
 	return Failure{
-		StatusCode: status,
+		StatusCode: statusCode,
 		Type:       errorType,
 		Message:    message,
 		RetryAfter: retryAfter,
-		Retryable:  retryableStatus(status),
+		Retryable:  retryable,
 	}
 }
 
@@ -93,29 +102,31 @@ func retryableStatus(status int) bool {
 		status >= 500 && status <= 599
 }
 
-func extractMessage(body []byte) (string, bool) {
+func extractMessage(body []byte) (string, bool, bool) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
-		return "", false
+		return "", false, false
 	}
 	var document any
 	if json.Unmarshal(trimmed, &document) != nil {
-		return string(trimmed), false
+		text := string(trimmed)
+		return text, false, quotaSignal(text)
 	}
 	overloaded := containsCode(document, "overloaded_error", 0)
+	quota := containsQuotaSignal(document, 0)
 	for _, path := range [][]string{
 		{"detail"}, {"message"}, {"error"}, {"error", "message"}, {"error", "detail"},
 		{"response", "error", "message"}, {"response", "error", "detail"},
 		{"error", "code"}, {"code"},
 	} {
 		if value := stringAt(document, path); value != "" {
-			return value, overloaded
+			return value, overloaded, quota || quotaSignal(value)
 		}
 	}
 	if text, ok := document.(string); ok {
-		return text, overloaded
+		return text, overloaded, quota || quotaSignal(text)
 	}
-	return string(trimmed), overloaded
+	return string(trimmed), overloaded, quota || quotaSignal(string(trimmed))
 }
 
 func stringAt(document any, path []string) string {
@@ -132,6 +143,39 @@ func stringAt(document any, path []string) string {
 	}
 	value, _ := current.(string)
 	return strings.TrimSpace(value)
+}
+
+func quotaSignal(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "usage cap") ||
+		strings.Contains(lower, "usage_cap")
+}
+
+func containsQuotaSignal(value any, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "type" || key == "code" {
+				if text, ok := child.(string); ok && quotaSignal(text) {
+					return true
+				}
+			}
+			if containsQuotaSignal(child, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if containsQuotaSignal(child, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsCode(value any, want string, depth int) bool {

@@ -439,6 +439,88 @@ func TestJSONRejectsMalformedInputWithoutFakeOutput(t *testing.T) {
 	}
 }
 
+func TestTextRedactsOpenAIAndAnthropicStyleAPIKeys(t *testing.T) {
+	keys := []string{
+		"sk-abcdefghijklmnopqrstuvwxyz123456",
+		"sk-proj-abcdefghijklmnopqrstuvwxyz123456",
+		"sk-ant-abcdefghijklmnopqrstuvwxyz123456",
+	}
+	for _, key := range keys {
+		input := "prefix " + key + " suffix"
+		got := Text(input)
+		if strings.Contains(got, key) {
+			t.Errorf("Text(%q) still contains API key", input)
+		}
+		if want := "prefix " + Marker + " suffix"; got != want {
+			t.Errorf("Text() = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestTextRedactsOpenAIAPIKeyAssignments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"env assignment", "OPENAI_API_KEY=secret-value", "OPENAI_API_KEY=" + Marker},
+		{"json field", `{"OPENAI_API_KEY":"secret-value","message":"safe"}`, `{"OPENAI_API_KEY":"` + Marker + `","message":"safe"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Text(tt.input); got != tt.want {
+				t.Fatalf("Text() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHeadersRedactsLocationAndRefererAsURLs(t *testing.T) {
+	source := http.Header{
+		"Location": []string{"https://example.test/callback?code=oauth-code&safe=ok"},
+		"Referer":  []string{"https://example.test/from?code=referer-code&state=oauth-state"},
+		"X-Trace":  []string{"https://example.test/from?code=should-remain"},
+	}
+	original := cloneHeader(source)
+
+	got := Headers(source)
+
+	if !reflect.DeepEqual(source, original) {
+		t.Fatalf("Headers mutated source:\n got  %#v\n want %#v", source, original)
+	}
+	location, err := url.Parse(got.Get("Location"))
+	if err != nil {
+		t.Fatalf("redacted Location is not a URL: %v", err)
+	}
+	if location.Query().Get("code") != Marker {
+		t.Errorf("Location code = %q, want marker", location.Query().Get("code"))
+	}
+	if location.Query().Get("safe") != "ok" {
+		t.Errorf("Location safe = %q, want %q", location.Query().Get("safe"), "ok")
+	}
+	if strings.Contains(got.Get("Location"), "oauth-code") {
+		t.Errorf("Location still contains code: %q", got.Get("Location"))
+	}
+
+	referer, err := url.Parse(got.Get("Referer"))
+	if err != nil {
+		t.Fatalf("redacted Referer is not a URL: %v", err)
+	}
+	if referer.Query().Get("code") != Marker {
+		t.Errorf("Referer code = %q, want marker", referer.Query().Get("code"))
+	}
+	if referer.Query().Get("state") != Marker {
+		t.Errorf("Referer state = %q, want marker", referer.Query().Get("state"))
+	}
+	if strings.Contains(got.Get("Referer"), "referer-code") || strings.Contains(got.Get("Referer"), "oauth-state") {
+		t.Errorf("Referer still contains secrets: %q", got.Get("Referer"))
+	}
+
+	if got.Get("X-Trace") != "https://example.test/from?code=should-remain" {
+		t.Errorf("nonsensitive header treated as URL: %q", got.Get("X-Trace"))
+	}
+}
+
 func TestTextRedactsBearersAndJWTsWithoutCorruptingBenignDots(t *testing.T) {
 	tests := []struct {
 		name  string

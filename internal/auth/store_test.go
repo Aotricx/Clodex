@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,37 @@ func TestCodexAuthPathUsesExplicitHome(t *testing.T) {
 	}
 	if _, err := CodexAuthPath(""); err == nil {
 		t.Fatal("CodexAuthPath(empty) error = nil")
+	}
+}
+
+func TestResolveCodexAuthPathUsesCODEXHOMEDirectory(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	got, err := ResolveCodexAuthPath(filepath.Join(t.TempDir(), "ignored-home"))
+	if err != nil {
+		t.Fatalf("ResolveCodexAuthPath() error = %v", err)
+	}
+	want := filepath.Join(codexHome, "auth.json")
+	if got != want {
+		t.Fatalf("ResolveCodexAuthPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveCodexAuthPathFallsBackToHomeWhenCODEXHOMEEmpty(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	home := filepath.Join(t.TempDir(), "chosen-home")
+
+	got, err := ResolveCodexAuthPath(home)
+	if err != nil {
+		t.Fatalf("ResolveCodexAuthPath() error = %v", err)
+	}
+	want := filepath.Join(home, ".codex", "auth.json")
+	if got != want {
+		t.Fatalf("ResolveCodexAuthPath() = %q, want %q", got, want)
+	}
+	if _, err := ResolveCodexAuthPath(""); err == nil {
+		t.Fatal("ResolveCodexAuthPath(empty home, empty CODEX_HOME) error = nil")
 	}
 }
 
@@ -563,6 +595,102 @@ func TestStoreReadWaitsForAtomicRenameCriticalSection(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Read() remained blocked after atomic rename critical section")
+	}
+}
+
+func TestStoreUpdateAtomicallyTakesAuthLockAroundRenameNotMutator(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	path := filepath.Join(t.TempDir(), "auth.json")
+	writeFileValue(t, path, validAuthFile(t, now.Add(time.Hour), now))
+	store := &Store{Path: path}
+
+	held, err := lockAuth(context.Background(), path)
+	if err != nil {
+		t.Fatalf("hold auth lock: %v", err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = held.Unlock()
+		}
+	}()
+
+	mutatorStarted := make(chan struct{})
+	enteredRename := make(chan struct{})
+	store.beforeRename = func(_, _ string) error {
+		close(enteredRename)
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.UpdateAtomically(func(current *File) error {
+			close(mutatorStarted)
+			current.LastRefresh = now.Add(time.Minute)
+			return nil
+		})
+		done <- err
+	}()
+
+	select {
+	case <-mutatorStarted:
+	case <-time.After(time.Second):
+		t.Fatal("mutator did not run while auth lock was held")
+	}
+
+	select {
+	case <-enteredRename:
+		t.Fatal("rename critical section ran while auth lock was held")
+	case err := <-done:
+		t.Fatalf("UpdateAtomically completed while auth lock was held: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := held.Unlock(); err != nil {
+		t.Fatalf("release auth lock: %v", err)
+	}
+	locked = false
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("UpdateAtomically() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("UpdateAtomically remained blocked after auth lock release")
+	}
+}
+
+func TestStoreUpdateAtomicallyNestedAuthLockDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	path := filepath.Join(t.TempDir(), "auth.json")
+	writeFileValue(t, path, validAuthFile(t, now.Add(time.Hour), now))
+	store := &Store{Path: path}
+
+	done := make(chan error, 1)
+	go func() {
+		held, err := lockAuth(context.Background(), path)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() { _ = held.Unlock() }()
+		_, err = store.UpdateAtomically(func(current *File) error {
+			current.LastRefresh = now.Add(time.Minute)
+			return nil
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("nested UpdateAtomically error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("UpdateAtomically deadlocked under lockAuth (refresh holds the sibling lock)")
 	}
 }
 

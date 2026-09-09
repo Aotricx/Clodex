@@ -16,6 +16,9 @@ import (
 const (
 	resizedImageTokens = 1844
 	onePixelPNG        = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	// 1x1 lossy WebP generated with Pillow. Anthropic accepts image/webp; the
+	// tokenizer must decode it instead of falling back to 1844 resized tokens.
+	onePixelWebP = "UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA="
 )
 
 func TestCountRequestCapturedSemanticInputs(t *testing.T) {
@@ -154,6 +157,39 @@ func TestCountRequestImagePayloadIsNotTokenized(t *testing.T) {
 	}
 	if got := countImage(t, onePixelPNG, codexwire.ImageDetailOriginal); got != 33 {
 		t.Fatalf("one-pixel original image count = %d, want 33", got)
+	}
+}
+
+func TestCountRequestWebPImageUsesDecodedPatches(t *testing.T) {
+	t.Parallel()
+	counter := newTestCounter(t)
+
+	count := func(t *testing.T, imageURL string) int {
+		t.Helper()
+		got, err := counter.CountRequest(codexwire.Request{Input: []codexwire.InputItem{codexwire.Message{
+			Role: "user", Content: []codexwire.ContentItem{codexwire.InputImage{
+				ImageURL: imageURL, Detail: codexwire.ImageDetailAuto,
+			}},
+		}}})
+		if err != nil {
+			t.Fatalf("CountRequest() error = %v", err)
+		}
+		return got
+	}
+
+	png := count(t, "data:image/png;base64,"+onePixelPNG)
+	if png != 33 {
+		t.Fatalf("one-pixel png count = %d, want 33", png)
+	}
+
+	webp := count(t, "data:image/webp;base64,"+onePixelWebP)
+	if webp >= resizedImageTokens {
+		t.Fatalf("one-pixel webp count = %d, want decoded 1x1 patches, not resized fallback %d", webp, resizedImageTokens)
+	}
+	// 1x1 WebP is one 32px patch, same as 1x1 PNG. The MIME in the stripped
+	// data-URL prefix may differ by at most one o200k token.
+	if delta := webp - png; delta < -1 || delta > 1 {
+		t.Fatalf("one-pixel webp count = %d, png count = %d, want ~1 patch each", webp, png)
 	}
 }
 

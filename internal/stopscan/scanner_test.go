@@ -84,3 +84,54 @@ func TestScannerRejectsEmptyStopSequence(t *testing.T) {
 		t.Fatal("New accepted empty stop sequence")
 	}
 }
+
+func TestScannerOneShotAgreesWithByteFeedsForOverlappingStops(t *testing.T) {
+	tests := []struct {
+		name      string
+		stops     []string
+		input     string
+		wantText  string
+		wantMatch string
+	}{
+		{
+			name:      "shorter interior stop",
+			stops:     []string{"cd", "abcdef"},
+			input:     "abcdef",
+			wantText:  "",
+			wantMatch: "abcdef",
+		},
+		{
+			name:      "shorter prefix of longer",
+			stops:     []string{"END", "EN"},
+			input:     "xEND",
+			wantText:  "x",
+			wantMatch: "END",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			oneShot, err := New(test.stops)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oneText := oneShot.Feed(test.input).Text + oneShot.Finish().Text
+
+			byteScanner, err := New(test.stops)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var byteText string
+			for i := 0; i < len(test.input); i++ {
+				byteText += byteScanner.Feed(test.input[i : i+1]).Text
+			}
+			byteText += byteScanner.Finish().Text
+
+			if oneText != test.wantText || oneShot.Match() != test.wantMatch || !oneShot.Stopped() {
+				t.Fatalf("one-shot output/match/stopped = %q/%q/%v, want %q/%q/true", oneText, oneShot.Match(), oneShot.Stopped(), test.wantText, test.wantMatch)
+			}
+			if byteText != oneText || byteScanner.Match() != oneShot.Match() || byteScanner.Stopped() != oneShot.Stopped() {
+				t.Fatalf("1-byte output/match/stopped = %q/%q/%v, one-shot = %q/%q/%v", byteText, byteScanner.Match(), byteScanner.Stopped(), oneText, oneShot.Match(), oneShot.Stopped())
+			}
+		})
+	}
+}

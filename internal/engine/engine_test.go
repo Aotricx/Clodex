@@ -591,6 +591,126 @@ func TestEngineRetriesNilTransportResponse(t *testing.T) {
 	}
 }
 
+func TestPrepareRetryErrorDoesNotDoubleCountFailed(t *testing.T) {
+	t.Run("circuit open", func(t *testing.T) {
+		controller, err := retry.New(retry.Config{
+			BaseDelay: time.Millisecond, MaxDelay: time.Second, RetryAfterLimit: time.Hour,
+			Budget: 100, BudgetWindow: time.Hour, FailureThreshold: 1, CircuitCooldown: time.Minute,
+		}, fixedClock{}, func() float64 { return 0 })
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport := &scriptedTransport{fallback: reply{status: 503, body: []byte(`{"error":{"message":"unavailable"}}`)}}
+		transient := 3
+		engine := &Engine{
+			Transport:           transport,
+			Retry:               controller,
+			MaxTransientRetries: &transient,
+			Wait:                func(context.Context, int, string) error { return nil },
+		}
+		_, runErr := engine.Run(context.Background(), testRequest(false), StreamHooks{})
+		var apiError *Error
+		if !errors.As(runErr, &apiError) || !strings.Contains(apiError.Failure.Message, retry.ErrCircuitOpen.Error()) {
+			t.Fatalf("Run error = %v, want circuit open", runErr)
+		}
+		if got := controller.Snapshot().Failures; got != 1 {
+			t.Fatalf("failures = %d, want 1 (prepareRetry Failed must not be followed by defer Failed)", got)
+		}
+	})
+
+	t.Run("wait cancel after transient", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		transport := &scriptedTransport{fallback: reply{status: 503, body: []byte(`{"error":{"message":"unavailable"}}`)}}
+		engine := newTestEngine(t, transport)
+		engine.Wait = func(context.Context, int, string) error {
+			cancel()
+			return context.Canceled
+		}
+		_, runErr := engine.Run(ctx, testRequest(false), StreamHooks{})
+		if !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled", runErr)
+		}
+		if got := engine.Retry.Snapshot().Failures; got != 1 {
+			t.Fatalf("failures = %d, want 1 (Codex 503 once; client cancel must not Failed(true) again)", got)
+		}
+	})
+}
+
+func TestClientCancelDoesNotCountAsRetryableCodexFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	engine := newTestEngineWithThreshold(t, &cancelingTransport{cancel: cancel}, 1)
+	_, runErr := engine.Run(ctx, testRequest(false), StreamHooks{})
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", runErr)
+	}
+	snapshot := engine.Retry.Snapshot()
+	if snapshot.Failures != 0 || snapshot.State != retry.StateClosed {
+		t.Fatalf("retry snapshot = %+v, want failures=0 closed (client cancel is not a Codex failure)", snapshot)
+	}
+	if allowErr := engine.Retry.Allow(); allowErr != nil {
+		t.Fatalf("Allow after client cancel = %v", allowErr)
+	}
+}
+
+func TestDrainCancelAfterTerminalSucceeds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := &onceBodyTransport{body: io.NopCloser(&cancelAtEOF{data: successText("ok"), cancel: cancel})}
+	engine := newTestEngine(t, transport)
+	result, err := engine.Run(ctx, testRequest(false), StreamHooks{})
+	if err != nil {
+		t.Fatalf("Run error = %v, want success after terminal then drain cancel", err)
+	}
+	if result.Response.Content[0].Text != "ok" || transport.attempts != 1 {
+		t.Fatalf("result=%#v attempts=%d", result, transport.attempts)
+	}
+	if snapshot := engine.Retry.Snapshot(); snapshot.Failures != 0 || snapshot.State != retry.StateClosed {
+		t.Fatalf("retry snapshot = %+v, want Succeeded", snapshot)
+	}
+}
+
+func TestCtxCancelBeforeTerminalDoesNotSucceedOrRetry(t *testing.T) {
+	partial := []byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"x\"}\n\n")
+
+	t.Run("buffered", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		transport := &onceBodyTransport{body: io.NopCloser(&cancelAtEOF{data: partial, cancel: cancel})}
+		engine := newTestEngine(t, transport)
+		_, err := engine.Run(ctx, testRequest(false), StreamHooks{})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled (no fake success)", err)
+		}
+		if transport.attempts != 1 {
+			t.Fatalf("attempts = %d, want 1", transport.attempts)
+		}
+		if snapshot := engine.Retry.Snapshot(); snapshot.Failures != 0 {
+			t.Fatalf("failures = %d, want 0", snapshot.Failures)
+		}
+	})
+
+	t.Run("committed stream", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		transport := &onceBodyTransport{body: io.NopCloser(&cancelAtEOF{data: partial, cancel: cancel})}
+		engine := newTestEngine(t, transport)
+		_, err := engine.Run(ctx, testRequest(true), StreamHooks{
+			Ready: func(http.Header) error { return nil },
+			Emit:  func(reducer.Event) error { return nil },
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled (committed stream still no fake success)", err)
+		}
+		if transport.attempts != 1 {
+			t.Fatalf("attempts = %d, want 1 (committed stream must not retry)", transport.attempts)
+		}
+		if snapshot := engine.Retry.Snapshot(); snapshot.Failures != 0 {
+			t.Fatalf("failures = %d, want 0", snapshot.Failures)
+		}
+	})
+}
+
 func testRequest(streaming bool) Request {
 	return Request{
 		Session:   upstream.Session{SessionID: "session", ThreadID: "thread"},
@@ -750,6 +870,39 @@ func (clock *testClock) advance(delay time.Duration) {
 	clock.mu.Lock()
 	clock.now = clock.now.Add(delay)
 	clock.mu.Unlock()
+}
+
+type onceBodyTransport struct {
+	body     io.ReadCloser
+	attempts int
+}
+
+func (transport *onceBodyTransport) Stream(context.Context, upstream.Session, codexwire.Request) (*http.Response, error) {
+	transport.attempts++
+	return &http.Response{
+		StatusCode: 200,
+		Header:     make(http.Header),
+		Body:       transport.body,
+	}, nil
+}
+
+type cancelAtEOF struct {
+	data   []byte
+	off    int
+	cancel context.CancelFunc
+}
+
+func (reader *cancelAtEOF) Read(p []byte) (int, error) {
+	if reader.off < len(reader.data) {
+		n := copy(p, reader.data[reader.off:])
+		reader.off += n
+		return n, nil
+	}
+	if reader.cancel != nil {
+		reader.cancel()
+		reader.cancel = nil
+	}
+	return 0, io.EOF
 }
 
 type cancelingTransport struct {

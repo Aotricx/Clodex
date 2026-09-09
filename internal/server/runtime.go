@@ -37,15 +37,7 @@ func Serve(ctx context.Context, port int, handler http.Handler, ready func(net.A
 		ready(listener.Addr())
 	}
 
-	httpServer := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    1 << 20,
-		BaseContext: func(net.Listener) context.Context {
-			return ctx
-		},
-	}
+	httpServer := newHTTPServer(ctx, handler)
 	stopShutdown := make(chan struct{})
 	shutdownResult := make(chan error, 1)
 	go func() {
@@ -72,4 +64,17 @@ func Serve(ctx context.Context, port int, handler http.Handler, ready func(net.A
 		return fmt.Errorf("serve Clodex: %w", serveErr)
 	}
 	return nil
+}
+
+func newHTTPServer(ctx context.Context, handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadTimeout:       0, // unlimited: long SSE responses must not be killed
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+	}
 }

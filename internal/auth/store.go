@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,12 +55,29 @@ type Store struct {
 }
 
 // CodexAuthPath resolves ~/.codex/auth.json from an explicit home directory.
-// It intentionally never consults HOME or os.UserHomeDir.
+// It intentionally never consults HOME, CODEX_HOME, or os.UserHomeDir.
 func CodexAuthPath(home string) (string, error) {
 	if home == "" {
 		return "", errors.New("resolve Codex auth path: home is empty")
 	}
 	return filepath.Join(home, ".codex", "auth.json"), nil
+}
+
+// ResolveCodexAuthPath returns $CODEX_HOME/auth.json when CODEX_HOME is a
+// nonempty directory path. Codex treats CODEX_HOME as the config directory
+// itself, not as a parent of .codex. Otherwise it falls back to CodexAuthPath.
+func ResolveCodexAuthPath(home string) (string, error) {
+	return CodexAuthPathFromEnv(home, os.Getenv)
+}
+
+// CodexAuthPathFromEnv is the testable form of ResolveCodexAuthPath.
+func CodexAuthPathFromEnv(home string, getenv func(string) string) (string, error) {
+	if getenv != nil {
+		if dir := getenv("CODEX_HOME"); dir != "" {
+			return filepath.Join(dir, "auth.json"), nil
+		}
+	}
+	return CodexAuthPath(home)
 }
 
 // Read returns a validated ChatGPT OAuth file with unknown JSON fields retained.
@@ -79,11 +97,13 @@ func (s *Store) Summary() (Summary, error) {
 
 // UpdateAtomically re-reads disk, passes a detached clone to mutator, validates
 // it, then persists with same-directory temp+fsync+rename. mutator runs without
-// Store's mutex and may be called again when disk changes; it must therefore be
-// side-effect-free. Retries are bounded by maxUpdateAttempts.
+// Store's mutex or the sibling auth lock and may be called again when disk
+// changes; it must therefore be side-effect-free. The compare-and-rename
+// critical section takes lockAuth (Clodex-vs-Clodex) and processUpdateMu.
+// Retries are bounded by maxUpdateAttempts.
 //
 // A missing file supplies an empty File, allowing login flows to create initial
-// state. API-key auth is never accepted.
+// state. API-key auth is never accepted. SaveLogin writes through this path.
 func (s *Store) UpdateAtomically(mutator func(current *File) error) (*File, error) {
 	if mutator == nil {
 		return nil, errors.New("update auth: nil mutator")
@@ -115,9 +135,7 @@ func (s *Store) UpdateAtomically(mutator func(current *File) error) (*File, erro
 			return nil, safeWrap("update auth: serialize failed", err)
 		}
 
-		processUpdateMu.Lock()
-		err = s.writeAtomic(encoded, original, existed)
-		processUpdateMu.Unlock()
+		err = s.persistAtomic(encoded, original, existed)
 		if errors.Is(err, errAuthChanged) {
 			continue
 		}
@@ -127,6 +145,28 @@ func (s *Store) UpdateAtomically(mutator func(current *File) error) (*File, erro
 		return candidate.clone(), nil
 	}
 	return nil, errors.New("update auth: contention limit exceeded")
+}
+
+func (s *Store) persistAtomic(encoded, original []byte, existed bool) error {
+	writePath, err := resolveAuthWritePath(s.Path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(writePath), 0o700); err != nil {
+		return fmt.Errorf("prepare auth directory: %w", err)
+	}
+	// Skip lockAuth when refreshIf already holds it. Darwin/Windows locks are
+	// per-handle; nesting would livelock. Other goroutines still wait.
+	if !authLockHeldByCurrentGoroutine(s.Path) {
+		held, err := lockAuth(context.Background(), s.Path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = held.Unlock() }()
+	}
+	processUpdateMu.Lock()
+	defer processUpdateMu.Unlock()
+	return s.writeAtomic(encoded, original, existed)
 }
 
 func (s *Store) readSnapshot() (*File, []byte, error) {

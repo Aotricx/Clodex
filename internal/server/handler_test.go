@@ -27,9 +27,13 @@ func TestHandlerHealthRootProbeStatusAndUnknownRoute(t *testing.T) {
 	handler, state := testHandler(t, nil)
 
 	root := httptest.NewRecorder()
-	handler.ServeHTTP(root, httptest.NewRequest(http.MethodHead, "/", nil))
-	if root.Code != http.StatusOK || root.Body.Len() != 0 || root.Header().Get("Clodex-Version") != "test-version" {
-		t.Fatalf("HEAD / = %d headers=%v body=%q", root.Code, root.Header(), root.Body.String())
+	handler.ServeHTTP(root, httptest.NewRequest(http.MethodGet, "/", nil))
+	assertAnthropicError(t, root, http.StatusNotFound, "not_found_error")
+
+	head := httptest.NewRecorder()
+	handler.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/", nil))
+	if head.Code != http.StatusNotFound || head.Body.Len() != 0 || head.Header().Get("Clodex-Version") != "test-version" || head.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("HEAD / = %d headers=%v body=%q", head.Code, head.Header(), head.Body.String())
 	}
 
 	health := httptest.NewRecorder()
@@ -101,7 +105,7 @@ func TestHandlerModelsAndCapturedClaudeCountTokensRequest(t *testing.T) {
 		t.Fatalf("models = %s, error=%v", models.Body.Bytes(), err)
 	}
 
-	countRequest := `{"model":"clodex-custom-model","messages":[{"role":"user","content":"foo"}],"tools":[]}`
+	countRequest := `{"model":"gpt-5.6-luna:low","messages":[{"role":"user","content":"foo"}],"tools":[]}`
 	count := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens?beta=true", strings.NewReader(countRequest))
 	request.Header.Set("Content-Type", "application/json")
@@ -183,6 +187,53 @@ type recordingCounter struct {
 func (counter *recordingCounter) CountRequest(request codexwire.Request) (int, error) {
 	counter.request = request
 	return 1, nil
+}
+
+func TestHandlerRejectsOversizedJSONBodiesBeforeDecode(t *testing.T) {
+	var messagesCalled atomic.Bool
+	handler, err := New(Options{
+		Version:      "test-version",
+		Status:       clodexstatus.New("test-version"),
+		Catalog:      fallbackResolver(t),
+		Counter:      mustCounter(t),
+		DefaultModel: "gpt-5.6-sol:medium",
+		Messages: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			messagesCalled.Store(true)
+			writer.WriteHeader(http.StatusNoContent)
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { maxJSONBodyBytes = defaultMaxJSONBodyBytes })
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens"} {
+		t.Run("content-length "+path, func(t *testing.T) {
+			messagesCalled.Store(false)
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.ContentLength = defaultMaxJSONBodyBytes + 1
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			assertAnthropicError(t, response, http.StatusRequestEntityTooLarge, "request_too_large")
+			if messagesCalled.Load() {
+				t.Fatal("messages handler ran for an oversized body")
+			}
+		})
+		t.Run("chunked "+path, func(t *testing.T) {
+			messagesCalled.Store(false)
+			maxJSONBodyBytes = 64
+			t.Cleanup(func() { maxJSONBodyBytes = defaultMaxJSONBodyBytes })
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"`+strings.Repeat("a", 128)+`"}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.ContentLength = -1
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			assertAnthropicError(t, response, http.StatusRequestEntityTooLarge, "request_too_large")
+			if messagesCalled.Load() {
+				t.Fatal("messages handler ran for an oversized body")
+			}
+		})
+	}
 }
 
 func TestHandlerValidatesMethodsContentTypeAndJSON(t *testing.T) {

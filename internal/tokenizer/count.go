@@ -16,6 +16,7 @@ import (
 
 	"github.com/Aotricx/Clodex/internal/codexwire"
 	tiktoken "github.com/tiktoken-go/tokenizer"
+	_ "golang.org/x/image/webp"
 )
 
 const (

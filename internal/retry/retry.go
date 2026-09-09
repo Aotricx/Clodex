@@ -193,6 +193,9 @@ func (controller *Controller) Failed(retryable bool) {
 		return
 	}
 	controller.failures++
+	if controller.state == StateOpen {
+		return
+	}
 	if controller.state == StateHalfOpen || controller.failures >= controller.config.FailureThreshold {
 		controller.state = StateOpen
 		controller.openUntil = controller.clock.Now().Add(controller.config.CircuitCooldown)

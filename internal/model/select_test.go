@@ -56,12 +56,8 @@ func TestClaudeCarrierRoundTripsCanonicalSelection(t *testing.T) {
 func TestMalformedCarrierRemainsUnknownFallback(t *testing.T) {
 	cat := fallbackCatalog(t)
 	for _, request := range []string{"anthropic-clodex-gpt-5.6-sol[wrong]", "anthropic-clodex-[1m]", "anthropic-clodex-future[1m]"} {
-		got, err := Resolve(cat, request, "gpt-5.6-luna:low", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Model.Slug != "gpt-5.6-luna" || got.Effort != "low" {
-			t.Fatalf("Resolve(%q) = %+v", request, got)
+		if _, err := Resolve(cat, request, "gpt-5.6-luna:low", 0); err == nil {
+			t.Fatalf("Resolve(%q) returned nil error", request)
 		}
 	}
 }
@@ -98,12 +94,9 @@ func TestResolveFallsBackWithoutAliasPolicy(t *testing.T) {
 		wantFast                 bool
 	}{
 		{"Claude alias uses configured default", "claude-opus-4-1", "gpt-5.6-sol:xhigh", 0, "gpt-5.6-sol", "xhigh", false},
-		{"unknown slug uses configured default", "future-unknown-model", "gpt-5.6-luna:high", 0, "gpt-5.6-luna", "high", false},
 		{"requested effort wins during alias fallback", "claude-opus-4-1:low", "gpt-5.6-sol:xhigh", 0, "gpt-5.6-sol", "low", false},
-		{"requested fast survives unknown fallback", "future-unknown-model:fast", "gpt-5.6-sol:xhigh", 0, "gpt-5.6-sol", "xhigh", true},
 		{"requested effort and fast survive alias fallback", "claude-opus-4-1:high:fast", "gpt-5.6-sol:medium", 0, "gpt-5.6-sol", "high", true},
 		{"Claude fallback inherits default fast", "claude-opus-4-1", "gpt-5.6-sol:medium:fast", 0, "gpt-5.6-sol", "medium", true},
-		{"unknown fallback inherits default fast", "future-unknown-model", "gpt-5.6-sol:medium:fast", 0, "gpt-5.6-sol", "medium", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,6 +108,45 @@ func TestResolveFallsBackWithoutAliasPolicy(t *testing.T) {
 				t.Fatalf("Resolve() = %+v, want slug=%q effort=%q fast=%v", got, tc.wantSlug, tc.wantEffort, tc.wantFast)
 			}
 		})
+	}
+}
+
+func TestResolveRejectsUnrecognizedNonClaudeSlugs(t *testing.T) {
+	cat := fallbackCatalog(t)
+	for _, request := range []string{
+		"gpt-5.6-so1",
+		"GPT-5.6-sol",
+		"future-unknown-model",
+		"future-unknown-model:fast",
+		"future-unknown-model:high",
+	} {
+		t.Run(request, func(t *testing.T) {
+			if _, err := Resolve(cat, request, "gpt-5.6-sol:medium", 0); err == nil {
+				t.Fatal("Resolve() returned nil error")
+			}
+		})
+	}
+}
+
+func TestResolveUsesCatalogClaudeSlugOverPrefixAlias(t *testing.T) {
+	cat := catalog.Catalog{Models: []catalog.Model{
+		{
+			Slug:                     "gpt-5.6-sol",
+			DefaultReasoningLevel:    "medium",
+			SupportedReasoningLevels: []catalog.ReasoningLevel{{Effort: "medium"}, {Effort: "high"}},
+		},
+		{
+			Slug:                     "claude-custom",
+			DefaultReasoningLevel:    "high",
+			SupportedReasoningLevels: []catalog.ReasoningLevel{{Effort: "medium"}, {Effort: "high"}},
+		},
+	}}
+	got, err := Resolve(cat, "claude-custom", "gpt-5.6-sol:medium", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model.Slug != "claude-custom" || got.Effort != "high" {
+		t.Fatalf("Resolve() = %+v, want catalog slug claude-custom", got)
 	}
 }
 

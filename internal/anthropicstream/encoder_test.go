@@ -44,7 +44,7 @@ func TestEncoderWritesExactAnthropicSSEOrder(t *testing.T) {
 		}
 	}
 	want := strings.Join([]string{
-		frame("message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"gpt-5.6-sol:xhigh","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`),
+		frame("message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"gpt-5.6-sol:xhigh","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`),
 		frame("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`),
 		frame("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}`),
 		frame("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"clodex:sig"}}`),
@@ -64,6 +64,30 @@ func TestEncoderWritesExactAnthropicSSEOrder(t *testing.T) {
 	}
 	if flushes != len(events)+2 { // message_start and terminal's second frame are extra.
 		t.Fatalf("flushes = %d, want %d", flushes, len(events)+2)
+	}
+}
+
+func TestEncoderTerminalOnlyMessageStartUsesKnownUsage(t *testing.T) {
+	var output bytes.Buffer
+	encoder, err := New(&output, Options{MessageID: "m", Model: "gpt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := reducer.Usage{InputTokens: 7, OutputTokens: 9, CacheCreationInputTokens: 2, CacheReadInputTokens: 3}
+	if err := encoder.Encode(reducer.Event{Kind: reducer.KindTerminal, Terminal: &reducer.Terminal{
+		StopReason: reducer.StopEndTurn,
+		Usage:      usage,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	wantStart := frame("message_start", `{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"gpt","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":7,"output_tokens":9,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}`)
+	wantDelta := frame("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":7,"output_tokens":9,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}`)
+	if !strings.Contains(got, wantStart) {
+		t.Fatalf("message_start missing known usage\n got: %s\nwant: %s", got, wantStart)
+	}
+	if !strings.Contains(got, wantDelta) {
+		t.Fatalf("message_delta missing final totals\n got: %s\nwant: %s", got, wantDelta)
 	}
 }
 
@@ -127,8 +151,8 @@ func TestEncoderStopMatchAlignsDroppedBlocksWithApplyStops(t *testing.T) {
 		if !strings.Contains(stream, `"text":"hello "`) || !strings.Contains(stream, `"stop_reason":"stop_sequence","stop_sequence":"END"`) {
 			t.Fatalf("stream = %s", stream)
 		}
-		if strings.Contains(stream, frame("content_block_stop", `{"type":"content_block_stop","index":1}`)) {
-			t.Fatalf("stream emitted content_block_stop for dropped tool: %s", stream)
+		if !strings.Contains(stream, frame("content_block_stop", `{"type":"content_block_stop","index":1}`)) {
+			t.Fatalf("stream missing content_block_stop for remaining open tool: %s", stream)
 		}
 		if !strings.Contains(stream, frame("content_block_stop", `{"type":"content_block_stop","index":0}`)) {
 			t.Fatalf("stream missing matching text stop: %s", stream)
@@ -166,6 +190,41 @@ func TestEncoderStopMatchAlignsDroppedBlocksWithApplyStops(t *testing.T) {
 			t.Fatalf("stream = %s", stream)
 		}
 	})
+}
+
+func TestEncoderKeepsEarlierDeltasAfterStopMatch(t *testing.T) {
+	var output bytes.Buffer
+	encoder, err := New(&output, Options{MessageID: "m", Model: "gpt", StopSequences: []string{"END"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []reducer.Event{
+		{Kind: reducer.KindContentStart, Index: 0, Block: reducer.ContentBlock{Type: reducer.BlockToolUse, ID: "early", Name: "lookup"}},
+		{Kind: reducer.KindContentStart, Index: 1, Block: reducer.ContentBlock{Type: reducer.BlockText}},
+		{Kind: reducer.KindContentDelta, Index: 1, Delta: reducer.Delta{Type: reducer.DeltaText, Text: "hello END extra"}},
+		{Kind: reducer.KindContentDelta, Index: 0, Delta: reducer.Delta{Type: reducer.DeltaInputJSON, Text: `{"q":1}`}},
+		{Kind: reducer.KindContentDelta, Index: 1, Delta: reducer.Delta{Type: reducer.DeltaText, Text: "dropped"}},
+		{Kind: reducer.KindContentStop, Index: 1},
+		{Kind: reducer.KindContentStop, Index: 0},
+		{Kind: reducer.KindTerminal, Terminal: &reducer.Terminal{StopReason: reducer.StopEndTurn, Usage: reducer.Usage{InputTokens: 3, OutputTokens: 4}}},
+	} {
+		if err := encoder.Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := output.String()
+	if !strings.Contains(got, `"partial_json":"{\"q\":1}"`) {
+		t.Fatalf("dropped earlier tool delta after match: %s", got)
+	}
+	if strings.Contains(got, "dropped") {
+		t.Fatalf("kept matching-block delta after match: %s", got)
+	}
+	if !strings.Contains(got, frame("content_block_stop", `{"type":"content_block_stop","index":0}`)) {
+		t.Fatalf("missing earlier tool stop: %s", got)
+	}
+	if !strings.Contains(got, frame("content_block_stop", `{"type":"content_block_stop","index":1}`)) {
+		t.Fatalf("missing matching text stop: %s", got)
+	}
 }
 
 func encodeAndBuffer(t *testing.T, stops []string, events []reducer.Event, result reducer.Result) (string, reducer.Result, []byte) {
@@ -212,6 +271,26 @@ func TestEncoderFlushesUnmatchedStopPrefixBeforeBlockStop(t *testing.T) {
 	}
 	if got := output.String(); !strings.Contains(got, `"text":"ends "`) || !strings.Contains(got, `"text":"ST"`) || encoder.MatchedStop() != "" {
 		t.Fatalf("stream = %s", got)
+	}
+}
+
+func TestEncoderPingEnsuresMessageStartFirst(t *testing.T) {
+	var output bytes.Buffer
+	encoder, err := New(&output, Options{MessageID: "m", Model: "gpt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Ping(); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Ping(); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	start := frame("message_start", `{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"gpt","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`)
+	ping := frame("ping", `{"type":"ping"}`)
+	if got != start+ping+ping {
+		t.Fatalf("Ping before start =\n got: %s\nwant: %s", got, start+ping+ping)
 	}
 }
 

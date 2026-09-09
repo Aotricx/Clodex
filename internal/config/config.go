@@ -119,7 +119,7 @@ func LoadServe(args []string, lookupEnv func(string) (string, bool)) (Config, er
 	var usage bytes.Buffer
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(&usage)
-	flags.IntVar(&cfg.Port, "port", cfg.Port, "loopback listen port")
+	flags.Var((*decimalIntValue)(&cfg.Port), "port", "loopback listen port")
 	flags.BoolVar(&cfg.DebugWire, "debug-wire", cfg.DebugWire, "log wire traffic")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: clodex serve [--port N] [--debug-wire]\n")
@@ -159,6 +159,24 @@ func (e *serveHelpError) Error() string {
 
 func (e *serveHelpError) Unwrap() error {
 	return flag.ErrHelp
+}
+
+type decimalIntValue int
+
+func (v *decimalIntValue) String() string {
+	if v == nil {
+		return "0"
+	}
+	return strconv.Itoa(int(*v))
+}
+
+func (v *decimalIntValue) Set(s string) error {
+	parsed, err := strconv.Atoi(s)
+	if err != nil {
+		return err
+	}
+	*v = decimalIntValue(parsed)
+	return nil
 }
 
 func envInt(lookupEnv func(string) (string, bool), key string) (int, bool, error) {

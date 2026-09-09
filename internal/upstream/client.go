@@ -228,7 +228,7 @@ func (c *Client) endpointURL() (*url.URL, error) {
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("parse Codex endpoint: credentials, query, and fragment are forbidden")
 	}
-	production := parsed.Scheme == "https" && strings.EqualFold(parsed.Hostname(), "chatgpt.com") &&
+	production := parsed.Scheme == "https" && strings.EqualFold(parsed.Host, "chatgpt.com") &&
 		parsed.Path == "/backend-api/codex/responses"
 	if !production && !isLoopbackHost(parsed.Hostname()) {
 		return nil, errors.New("parse Codex endpoint: HTTPS chatgpt.com endpoint required; only loopback test endpoints may use HTTP")
@@ -265,17 +265,21 @@ func (c *Client) httpClient() *http.Client {
 		return c.HTTPClient
 	}
 	c.defaultOnce.Do(func() {
-		c.defaultHTTP = &http.Client{Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   32,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 60 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		}}
+		c.defaultHTTP = &http.Client{
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyFromEnvironment,
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   32,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 60 * time.Second,
+				ExpectContinueTimeout: time.Second,
+			}}
 	})
 	return c.defaultHTTP
 }

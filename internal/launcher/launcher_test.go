@@ -196,6 +196,11 @@ func TestRunReusesHealthyProxyAndBuildsClaudeEnvironment(t *testing.T) {
 			"anthropic_model=duplicate",
 			"ANTHROPIC_BASE_URL=http://wrong",
 			"CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000",
+			"ANTHROPIC_API_KEY=sk-ant-real",
+			"ANTHROPIC_UNIX_SOCKET=/tmp/anthropic.sock",
+			"CLAUDE_CODE_USE_BEDROCK=1",
+			"CLAUDE_CODE_USE_VERTEX=1",
+			"HTTP_PROXY=http://proxy.example:8080",
 		}
 	}
 	options.Dependencies.Spawn = func(_ context.Context, command Command) (Process, error) {
@@ -223,9 +228,25 @@ func TestRunReusesHealthyProxyAndBuildsClaudeEnvironment(t *testing.T) {
 		"ANTHROPIC_MODEL":                 "anthropic-clodex-gpt-main:medium[1m]",
 		"ANTHROPIC_SMALL_FAST_MODEL":      "anthropic-clodex-gpt-small:low[1m]",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "272000",
+		"HTTP_PROXY":                      "http://proxy.example:8080",
 	})
-	if _, ok := environmentValue(command.Env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS"); ok {
-		t.Fatal("obsolete MAX_CONTEXT override survived launcher environment")
+	for _, key := range []string{
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_UNIX_SOCKET",
+		"CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_USE_VERTEX",
+		"CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+	} {
+		if _, ok := environmentValue(command.Env, key); ok {
+			t.Errorf("%s survived launcher environment", key)
+		}
+	}
+	noProxy, ok := environmentValue(command.Env, "NO_PROXY")
+	if !ok {
+		t.Fatal("NO_PROXY missing while HTTP_PROXY is passed through")
+	}
+	if !strings.Contains(noProxy, "127.0.0.1") || !strings.Contains(noProxy, "localhost") {
+		t.Fatalf("NO_PROXY = %q, want 127.0.0.1 and localhost", noProxy)
 	}
 	for _, key := range targetEnvironmentKeys {
 		if count := envKeyCount(command.Env, key); count != 1 {
@@ -246,7 +267,8 @@ func TestRunUsesCatalogFallbackContextForConfiguredAndUnknownModels(t *testing.T
 		wantErr     string
 	}{
 		{name: "known override", args: []string{"--model", "gpt-small:low"}, wantModel: "gpt-small:low", wantSmall: "gpt-small:low", wantContext: "128000"},
-		{name: "unknown aliases fallback", args: []string{"--model", "future-model:xhigh", "--small-fast-model", "claude-haiku-4"}, wantModel: "gpt-main:xhigh", wantSmall: "gpt-small:low", wantContext: "272000"},
+		{name: "unknown aliases fallback", args: []string{"--model", "claude-haiku-4:xhigh", "--small-fast-model", "claude-haiku-4"}, wantModel: "gpt-main:xhigh", wantSmall: "gpt-small:low", wantContext: "272000"},
+		{name: "unknown requested model", args: []string{"--model", "future-model:xhigh"}, wantErr: "not present in catalog"},
 		{name: "invalid known effort", args: []string{"--model", "gpt-small:ultra"}, wantErr: "does not support effort"},
 	}
 	for _, test := range tests {
@@ -613,7 +635,7 @@ func TestRunSubprocessPassThroughAndSpawnedHealth(t *testing.T) {
 		}
 	})
 
-	err := Run(context.Background(), []string{"--model", "future-model:xhigh", "--", "-p", "task with spaces"}, options)
+	err := Run(context.Background(), []string{"--model", "gpt-main:xhigh", "--", "-p", "task with spaces"}, options)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

@@ -106,6 +106,19 @@ func (p *Parser) Next() (Event, error) {
 			if len(line) > 0 && errors.Is(err, io.EOF) {
 				p.applyLine(line)
 			}
+			if errors.Is(err, io.EOF) {
+				event, ok, dispatchErr := p.dispatchCompleteAtEOF()
+				if dispatchErr != nil {
+					p.ended = dispatchErr
+					return Event{}, dispatchErr
+				}
+				if ok {
+					if event.Terminal() {
+						p.terminal = true
+					}
+					return event, nil
+				}
+			}
 			return Event{}, p.finish(err)
 		}
 		if len(line) == 0 {
@@ -205,6 +218,21 @@ func (p *Parser) applyLine(line []byte) {
 	}
 }
 
+func (p *Parser) dispatchCompleteAtEOF() (Event, bool, error) {
+	if len(p.data) == 0 {
+		return Event{}, false, nil
+	}
+	raw := bytes.Join(p.data, []byte{'\n'})
+	if !json.Valid(raw) {
+		return Event{}, false, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return Event{}, false, nil
+	}
+	return p.dispatch()
+}
+
 func (p *Parser) dispatch() (Event, bool, error) {
 	defer p.resetFrame()
 	if len(p.data) == 0 {
@@ -263,6 +291,7 @@ var terminalTypes = map[string]struct{}{
 	"response.done":       {},
 	"response.incomplete": {},
 	"response.failed":     {},
+	"error":               {},
 }
 
 var knownTypes = map[string]struct{}{
@@ -295,4 +324,5 @@ var knownTypes = map[string]struct{}{
 	"response.done":                          {},
 	"response.incomplete":                    {},
 	"response.failed":                        {},
+	"error":                                  {},
 }

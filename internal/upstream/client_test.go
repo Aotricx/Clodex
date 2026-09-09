@@ -97,6 +97,29 @@ func TestClientRejectsNonHTTPSNonLoopbackEndpoint(t *testing.T) {
 	}
 }
 
+func TestClientEmptyEndpointUsesDefaultEndpoint(t *testing.T) {
+	t.Parallel()
+	client := testClientWithoutServer(t)
+	client.Endpoint = ""
+	parsed, err := client.endpointURL()
+	if err != nil {
+		t.Fatalf("empty Endpoint: %v", err)
+	}
+	if parsed.String() != DefaultEndpoint {
+		t.Fatalf("endpoint = %q, want %q", parsed.String(), DefaultEndpoint)
+	}
+}
+
+func TestClientRejectsProductionEndpointWithNonDefaultPort(t *testing.T) {
+	t.Parallel()
+	client := testClientWithoutServer(t)
+	client.Endpoint = "https://chatgpt.com:444/backend-api/codex/responses"
+	_, err := client.endpointURL()
+	if err == nil || !strings.Contains(err.Error(), "HTTPS chatgpt.com") {
+		t.Fatalf("endpointURL() error = %v, want Host pin rejection of chatgpt.com:444", err)
+	}
+}
+
 func TestClientClassifiesCredentialFailuresWithoutLeakingSecrets(t *testing.T) {
 	client := testClientWithoutServer(t)
 	client.Auth = &auth.Coordinator{Store: &auth.Store{Path: filepath.Join(t.TempDir(), "missing-auth.json")}}
@@ -311,6 +334,56 @@ func TestClientReusesDefaultHTTPTransport(t *testing.T) {
 	second := client.httpClient()
 	if first != second {
 		t.Fatal("default HTTP client was rebuilt; connection pooling would be lost")
+	}
+}
+
+func TestClientDoesNotFollowRedirectsAndTreatsThemAsProtocolFailure(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name   string
+		status int
+	}{
+		{name: "307", status: http.StatusTemporaryRedirect},
+		{name: "308", status: http.StatusPermanentRedirect},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var paths []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				paths = append(paths, r.URL.Path)
+				mu.Unlock()
+				if r.URL.Path == "/backend-api/codex/responses" {
+					http.Redirect(w, r, "/hijacked", tt.status)
+					return
+				}
+				t.Errorf("followed redirect to %s with Authorization %q", r.URL.Path, r.Header.Get("Authorization"))
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+			}))
+			defer server.Close()
+
+			client := testClientWithoutServer(t)
+			client.Endpoint = server.URL + "/backend-api/codex/responses"
+			response, err := client.Stream(context.Background(), Session{SessionID: "s", ThreadID: "t"}, codexwire.Request{Model: "m"})
+			if err != nil {
+				t.Fatalf("Stream error = %v, want (response, nil) like other non-2xx protocol failures", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				t.Fatalf("StatusCode = %d, want non-2xx so engine uses failure.FromHTTP", response.StatusCode)
+			}
+			if response.StatusCode != tt.status {
+				t.Fatalf("StatusCode = %d, want %d", response.StatusCode, tt.status)
+			}
+			mu.Lock()
+			got := append([]string(nil), paths...)
+			mu.Unlock()
+			if len(got) != 1 || got[0] != "/backend-api/codex/responses" {
+				t.Fatalf("request paths = %#v, want only the original POST (no follow)", got)
+			}
+		})
 	}
 }
 

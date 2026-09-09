@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -16,6 +18,13 @@ import (
 	"github.com/Aotricx/Clodex/internal/requestprep"
 	clodexstatus "github.com/Aotricx/Clodex/internal/status"
 )
+
+const defaultMaxJSONBodyBytes int64 = 32 << 20
+
+// maxJSONBodyBytes caps JSON request bodies for /v1/messages and
+// /v1/messages/count_tokens. Tests may lower it to exercise the overflow path
+// without allocating 32MiB.
+var maxJSONBodyBytes = defaultMaxJSONBodyBytes
 
 // CatalogResolver is implemented by catalog.Manager.
 type CatalogResolver interface {
@@ -82,11 +91,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 
 	switch request.URL.Path {
 	case "/":
-		if request.Method != http.MethodHead {
-			handler.writeNotFound(writer)
-			return
-		}
-		writer.WriteHeader(http.StatusOK)
+		handler.writeNotFound(writer, request.Method == http.MethodHead)
 	case "/healthz":
 		if !allowMethod(writer, request, http.MethodGet, http.MethodHead) {
 			return
@@ -112,7 +117,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		if !allowMethod(writer, request, http.MethodPost) {
 			return
 		}
-		if !requireJSON(writer, request) {
+		if !requireJSON(writer, request) || !limitJSONBody(writer, request) {
 			return
 		}
 		handler.countTokens(writer, request)
@@ -120,14 +125,14 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		if !allowMethod(writer, request, http.MethodPost) {
 			return
 		}
-		if !requireJSON(writer, request) {
+		if !requireJSON(writer, request) || !limitJSONBody(writer, request) {
 			return
 		}
 		end := handler.status.BeginSession()
 		defer end()
 		handler.messages.ServeHTTP(writer, request)
 	default:
-		handler.writeNotFound(writer)
+		handler.writeNotFound(writer, request.Method == http.MethodHead)
 	}
 }
 
@@ -214,8 +219,43 @@ func requireJSON(writer http.ResponseWriter, request *http.Request) bool {
 	return true
 }
 
-func (handler *Handler) writeNotFound(writer http.ResponseWriter) {
-	handler.writeError(writer, http.StatusNotFound, "not_found_error", "requested Clodex endpoint was not found")
+func limitJSONBody(writer http.ResponseWriter, request *http.Request) bool {
+	if request.ContentLength > maxJSONBodyBytes {
+		writeRequestTooLarge(writer)
+		return false
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxJSONBodyBytes)
+	body, err := io.ReadAll(request.Body)
+	_ = request.Body.Close()
+	if err != nil {
+		if isRequestTooLarge(err) {
+			writeRequestTooLarge(writer)
+			return false
+		}
+		writeError(writer, http.StatusBadRequest, "invalid_request_error", "request body is invalid")
+		return false
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	return true
+}
+
+func isRequestTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	var maxBytes *http.MaxBytesError
+	return errors.As(err, &maxBytes)
+}
+
+func writeRequestTooLarge(writer http.ResponseWriter) {
+	writeError(writer, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the maximum allowed size")
+}
+
+func (handler *Handler) writeNotFound(writer http.ResponseWriter, head bool) {
+	writeJSON(writer, http.StatusNotFound, anthropic.ErrorResponse{
+		Type: "error", Error: anthropic.ErrorDetail{Type: "not_found_error", Message: "requested Clodex endpoint was not found"},
+	}, head)
 }
 
 func (handler *Handler) writeAnyError(writer http.ResponseWriter, err error) {

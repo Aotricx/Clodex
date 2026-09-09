@@ -49,6 +49,22 @@ func TestServeBindsIPv4LoopbackAndShutsDown(t *testing.T) {
 	}
 }
 
+func TestNewHTTPServerLeavesReadTimeoutUnlimitedForSSE(t *testing.T) {
+	server := newHTTPServer(context.Background(), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	if server.ReadTimeout != 0 {
+		t.Fatalf("ReadTimeout = %s, want 0 so long SSE responses are not killed", server.ReadTimeout)
+	}
+	if server.ReadHeaderTimeout != 10*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %s, want 10s", server.ReadHeaderTimeout)
+	}
+	if server.IdleTimeout != 2*time.Minute {
+		t.Fatalf("IdleTimeout = %s", server.IdleTimeout)
+	}
+	if server.MaxHeaderBytes != 1<<20 {
+		t.Fatalf("MaxHeaderBytes = %d", server.MaxHeaderBytes)
+	}
+}
+
 func TestServeValidatesPortHandlerAndContext(t *testing.T) {
 	valid := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	for _, test := range []struct {

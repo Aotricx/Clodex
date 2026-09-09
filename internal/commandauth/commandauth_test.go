@@ -316,6 +316,62 @@ func TestBrowserLoginReturnsPersistenceFailureWithoutTokens(t *testing.T) {
 	assertNoTokenLeak(t, err.Error(), tokens)
 }
 
+func TestLogoutRemovesAuthFileWithoutPrintingTokens(t *testing.T) {
+	now := time.Date(2026, 7, 21, 21, 22, 23, 0, time.UTC)
+	tokens := testTokens(t, now.Add(time.Hour).Unix())
+	path := filepath.Join(t.TempDir(), ".codex", "auth.json")
+	store := &auth.Store{Path: path}
+	if _, err := store.SaveLogin(tokens, now); err != nil {
+		t.Fatalf("seed auth: %v", err)
+	}
+	var output bytes.Buffer
+	service := &Service{Store: store, Writer: &output}
+
+	if err := service.Logout(context.Background()); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("auth file still present after Logout: %v", err)
+	}
+	if _, err := store.Read(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Read after Logout error = %v, want os.ErrNotExist", err)
+	}
+	assertNoTokenLeak(t, output.String(), tokens)
+}
+
+func TestLogoutSucceedsWhenAuthFileMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".codex", "auth.json")
+	service := &Service{Store: &auth.Store{Path: path}, Writer: &bytes.Buffer{}}
+
+	if err := service.Logout(context.Background()); err != nil {
+		t.Fatalf("Logout missing file: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Logout created auth file: %v", err)
+	}
+}
+
+func TestLogoutHonorsCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(path, []byte("tokens-should-remain"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	service := &Service{Store: &auth.Store{Path: path}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := service.Logout(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Logout error = %v, want context.Canceled", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("canceled Logout removed auth file: %v", err)
+	}
+	if string(data) != "tokens-should-remain" {
+		t.Fatalf("canceled Logout mutated file: %q", data)
+	}
+}
+
 func TestStatusRejectsUnknownFormatWithoutWriting(t *testing.T) {
 	now := time.Now().UTC()
 	store := &auth.Store{Path: filepath.Join(t.TempDir(), "auth.json")}

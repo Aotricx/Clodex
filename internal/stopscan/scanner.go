@@ -47,22 +47,8 @@ func (s *Scanner) Feed(delta string) Result {
 		return Result{Text: delta}
 	}
 	s.buffer += delta
-
-	matchOffset := -1
-	matchValue := ""
-	for _, stop := range s.stops {
-		offset := strings.Index(s.buffer, stop)
-		if offset >= 0 && (matchOffset < 0 || offset < matchOffset) {
-			matchOffset = offset
-			matchValue = stop
-		}
-	}
-	if matchOffset >= 0 {
-		text := s.buffer[:matchOffset]
-		s.buffer = ""
-		s.match = matchValue
-		s.stopped = true
-		return Result{Text: text, Matched: matchValue}
+	if result, ok := s.commitMatch(true); ok {
+		return result
 	}
 
 	retained := s.longestPossiblePrefixSuffix()
@@ -78,9 +64,55 @@ func (s *Scanner) Finish() Result {
 		return Result{}
 	}
 	s.finished = true
+	if result, ok := s.commitMatch(false); ok {
+		return result
+	}
 	text := s.buffer
 	s.buffer = ""
 	return Result{Text: text}
+}
+
+// commitMatch takes the leftmost complete stop. When holdPending, a match that
+// is still a prefix of a longer stop (or sits inside one that could complete
+// earlier) is retained so later bytes can agree with a one-shot Feed.
+func (s *Scanner) commitMatch(holdPending bool) (Result, bool) {
+	matchOffset := -1
+	matchValue := ""
+	matchIndex := -1
+	for i, stop := range s.stops {
+		offset := strings.Index(s.buffer, stop)
+		if offset >= 0 && (matchOffset < 0 || offset < matchOffset) {
+			matchOffset = offset
+			matchValue = stop
+			matchIndex = i
+		}
+	}
+	if matchOffset < 0 {
+		return Result{}, false
+	}
+	if holdPending && s.couldOverride(matchOffset, matchIndex) {
+		return Result{}, false
+	}
+	text := s.buffer[:matchOffset]
+	s.buffer = ""
+	s.match = matchValue
+	s.stopped = true
+	return Result{Text: text, Matched: matchValue}, true
+}
+
+func (s *Scanner) couldOverride(matchOffset, matchIndex int) bool {
+	for i, stop := range s.stops {
+		for start := 0; start <= matchOffset; start++ {
+			remaining := s.buffer[start:]
+			if remaining == stop || !strings.HasPrefix(stop, remaining) {
+				continue
+			}
+			if start < matchOffset || i < matchIndex {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Scanner) Stopped() bool {

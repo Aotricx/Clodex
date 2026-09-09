@@ -41,6 +41,8 @@ type ContentBlock struct {
 	Type             string
 	Text             *TextBlock
 	Image            *ImageBlock
+	Document         *DocumentBlock
+	SearchResult     *SearchResultBlock
 	ToolUse          *ToolUseBlock
 	ToolResult       *ToolResultBlock
 	Thinking         *ThinkingBlock
@@ -50,7 +52,7 @@ type ContentBlock struct {
 
 // Unknown reports whether a block has no locally decoded semantic variant.
 func (b ContentBlock) Unknown() bool {
-	return b.Text == nil && b.Image == nil && b.ToolUse == nil && b.ToolResult == nil && b.Thinking == nil && b.RedactedThinking == nil
+	return b.Text == nil && b.Image == nil && b.Document == nil && b.SearchResult == nil && b.ToolUse == nil && b.ToolResult == nil && b.Thinking == nil && b.RedactedThinking == nil
 }
 
 type TextBlock struct {
@@ -68,6 +70,26 @@ type ImageSource struct {
 	MediaType string
 	Data      string
 	URL       string
+}
+
+type DocumentBlock struct {
+	Source       DocumentSource `json:"source"`
+	Title        string         `json:"title,omitempty"`
+	CacheControl *CacheControl  `json:"cache_control,omitempty"`
+}
+
+type DocumentSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+}
+
+type SearchResultBlock struct {
+	Source       string         `json:"source"`
+	Title        string         `json:"title"`
+	Content      []ContentBlock `json:"content"`
+	CacheControl *CacheControl  `json:"cache_control,omitempty"`
 }
 
 type ToolUseBlock struct {

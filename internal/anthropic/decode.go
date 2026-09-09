@@ -246,6 +246,18 @@ func decodeContentBlock(raw json.RawMessage, path string) (ContentBlock, error) 
 			return ContentBlock{}, err
 		}
 		block.Image = image
+	case "document":
+		document, err := decodeDocumentBlock(object, path)
+		if err != nil {
+			return ContentBlock{}, err
+		}
+		block.Document = document
+	case "search_result":
+		searchResult, err := decodeSearchResultBlock(object, path)
+		if err != nil {
+			return ContentBlock{}, err
+		}
+		block.SearchResult = searchResult
 	case "tool_use":
 		toolUse, err := decodeToolUseBlock(object, path)
 		if err != nil {
@@ -279,55 +291,108 @@ func decodeContentBlock(raw json.RawMessage, path string) (ContentBlock, error) 
 }
 
 func decodeImageBlock(object map[string]json.RawMessage, path string) (*ImageBlock, error) {
-	sourceRaw, ok := object["source"]
-	if !ok {
-		return nil, invalidRequest("%s.source is required", path)
-	}
-	sourceObject, err := decodeObject(sourceRaw, path+".source")
+	source, err := decodeBase64OrURLSource(object, path, supportedImageMediaType)
 	if err != nil {
 		return nil, err
-	}
-	sourceType, err := requiredNonemptyString(sourceObject, "type", path+".source.type")
-	if err != nil {
-		return nil, err
-	}
-	source := ImageSource{Type: sourceType}
-	switch sourceType {
-	case "base64":
-		source.MediaType, err = requiredNonemptyString(sourceObject, "media_type", path+".source.media_type")
-		if err != nil {
-			return nil, err
-		}
-		if !supportedImageMediaType(source.MediaType) {
-			return nil, invalidRequest("%s.source.media_type is unsupported", path)
-		}
-		source.Data, err = requiredNonemptyString(sourceObject, "data", path+".source.data")
-		if err != nil {
-			return nil, err
-		}
-		if strings.ContainsAny(source.Data, " \t\r\n") {
-			return nil, invalidRequest("%s.source.data must be strict base64", path)
-		}
-		if _, err := base64.StdEncoding.Strict().DecodeString(source.Data); err != nil {
-			return nil, invalidRequest("%s.source.data must be strict base64: %v", path, err)
-		}
-	case "url":
-		source.URL, err = requiredNonemptyString(sourceObject, "url", path+".source.url")
-		if err != nil {
-			return nil, err
-		}
-		parsed, parseErr := url.Parse(source.URL)
-		if parseErr != nil || !(strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) || parsed.Host == "" || parsed.Hostname() == "" {
-			return nil, invalidRequest("%s.source.url must be an absolute HTTP or HTTPS URL", path)
-		}
-	default:
-		return nil, invalidRequest("%s.source.type %q is unsupported", path, sourceType)
 	}
 	cache, err := optionalCacheControl(object, "cache_control", path+".cache_control")
 	if err != nil {
 		return nil, err
 	}
-	return &ImageBlock{Source: source, CacheControl: cache}, nil
+	return &ImageBlock{Source: ImageSource(source), CacheControl: cache}, nil
+}
+
+func decodeDocumentBlock(object map[string]json.RawMessage, path string) (*DocumentBlock, error) {
+	source, err := decodeBase64OrURLSource(object, path, supportedDocumentMediaType)
+	if err != nil {
+		return nil, err
+	}
+	document := &DocumentBlock{Source: source}
+	if titleRaw, present := object["title"]; present && !isNull(titleRaw) {
+		if json.Unmarshal(titleRaw, &document.Title) != nil {
+			return nil, invalidRequest("%s.title must be a string", path)
+		}
+	}
+	document.CacheControl, err = optionalCacheControl(object, "cache_control", path+".cache_control")
+	if err != nil {
+		return nil, err
+	}
+	return document, nil
+}
+
+func decodeSearchResultBlock(object map[string]json.RawMessage, path string) (*SearchResultBlock, error) {
+	source, err := requiredNonemptyString(object, "source", path+".source")
+	if err != nil {
+		return nil, err
+	}
+	title, err := requiredString(object, "title", path+".title")
+	if err != nil {
+		return nil, err
+	}
+	contentRaw, ok := object["content"]
+	if !ok {
+		return nil, invalidRequest("%s.content is required", path)
+	}
+	content, err := decodeContent(contentRaw, path+".content")
+	if err != nil {
+		return nil, err
+	}
+	if err := validateContentPlacement(content, "search_result", path+".content"); err != nil {
+		return nil, err
+	}
+	cache, err := optionalCacheControl(object, "cache_control", path+".cache_control")
+	if err != nil {
+		return nil, err
+	}
+	return &SearchResultBlock{Source: source, Title: title, Content: content, CacheControl: cache}, nil
+}
+
+func decodeBase64OrURLSource(object map[string]json.RawMessage, path string, supportedMedia func(string) bool) (DocumentSource, error) {
+	sourceRaw, ok := object["source"]
+	if !ok {
+		return DocumentSource{}, invalidRequest("%s.source is required", path)
+	}
+	sourceObject, err := decodeObject(sourceRaw, path+".source")
+	if err != nil {
+		return DocumentSource{}, err
+	}
+	sourceType, err := requiredNonemptyString(sourceObject, "type", path+".source.type")
+	if err != nil {
+		return DocumentSource{}, err
+	}
+	source := DocumentSource{Type: sourceType}
+	switch sourceType {
+	case "base64":
+		source.MediaType, err = requiredNonemptyString(sourceObject, "media_type", path+".source.media_type")
+		if err != nil {
+			return DocumentSource{}, err
+		}
+		if !supportedMedia(source.MediaType) {
+			return DocumentSource{}, invalidRequest("%s.source.media_type is unsupported", path)
+		}
+		source.Data, err = requiredNonemptyString(sourceObject, "data", path+".source.data")
+		if err != nil {
+			return DocumentSource{}, err
+		}
+		if strings.ContainsAny(source.Data, " \t\r\n") {
+			return DocumentSource{}, invalidRequest("%s.source.data must be strict base64", path)
+		}
+		if _, err := base64.StdEncoding.Strict().DecodeString(source.Data); err != nil {
+			return DocumentSource{}, invalidRequest("%s.source.data must be strict base64: %v", path, err)
+		}
+	case "url":
+		source.URL, err = requiredNonemptyString(sourceObject, "url", path+".source.url")
+		if err != nil {
+			return DocumentSource{}, err
+		}
+		parsed, parseErr := url.Parse(source.URL)
+		if parseErr != nil || !(strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) || parsed.Host == "" || parsed.Hostname() == "" {
+			return DocumentSource{}, invalidRequest("%s.source.url must be an absolute HTTP or HTTPS URL", path)
+		}
+	default:
+		return DocumentSource{}, invalidRequest("%s.source.type %q is unsupported", path, sourceType)
+	}
+	return source, nil
 }
 
 func decodeToolUseBlock(object map[string]json.RawMessage, path string) (*ToolUseBlock, error) {
@@ -507,7 +572,7 @@ func decodeMetadata(raw json.RawMessage) (*Metadata, error) {
 
 func optionalCacheControl(object map[string]json.RawMessage, field, path string) (*CacheControl, error) {
 	raw, present := object[field]
-	if !present {
+	if !present || isNull(raw) {
 		return nil, nil
 	}
 	cacheObject, err := decodeObject(raw, path)
@@ -548,11 +613,13 @@ func validateContentPlacement(blocks []ContentBlock, placement, path string) err
 		case "system":
 			allowed = block.Text != nil
 		case "user":
-			allowed = block.Text != nil || block.Image != nil || block.ToolResult != nil
+			allowed = block.Text != nil || block.Image != nil || block.Document != nil || block.SearchResult != nil || block.ToolResult != nil
 		case "assistant":
 			allowed = block.Text != nil || block.ToolUse != nil || block.Thinking != nil || block.RedactedThinking != nil
 		case "tool_result":
-			allowed = block.Text != nil || block.Image != nil
+			allowed = block.Text != nil || block.Image != nil || block.Document != nil || block.SearchResult != nil
+		case "search_result":
+			allowed = block.Text != nil
 		}
 		if !allowed {
 			return invalidRequest("%s[%d] type %q is not valid in %s content", path, i, block.Type, placement)
@@ -602,6 +669,10 @@ func supportedImageMediaType(mediaType string) bool {
 	default:
 		return false
 	}
+}
+
+func supportedDocumentMediaType(mediaType string) bool {
+	return mediaType == "application/pdf"
 }
 
 func cloneRaw(raw json.RawMessage) json.RawMessage {

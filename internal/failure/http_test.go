@@ -10,27 +10,30 @@ import (
 func TestFromHTTPMapsAnthropicErrorTypesAndPreservesReason(t *testing.T) {
 	tests := []struct {
 		name, body, wantType, wantMessage string
-		status                            int
+		status, wantStatus                int
 		wantRetryable                     bool
 	}{
-		{"bad request detail", `{"detail":"unsupported effort"}`, "invalid_request_error", "unsupported effort", 400, false},
-		{"authentication", `{"error":{"message":"token expired"}}`, "authentication_error", "token expired", 401, false},
-		{"permission", `{"message":"account forbidden"}`, "permission_error", "account forbidden", 403, false},
-		{"not found", `{"error":"model absent"}`, "not_found_error", "model absent", 404, false},
-		{"timeout", `{"error":{"message":"request timed out"}}`, "api_error", "request timed out", 408, true},
-		{"conflict", `{"detail":"try again"}`, "api_error", "try again", 409, true},
-		{"too early", `{"detail":"too early"}`, "api_error", "too early", 425, true},
-		{"too large", `{"detail":"image too large"}`, "request_too_large", "image too large", 413, false},
-		{"unprocessable", `{"detail":"invalid schema"}`, "invalid_request_error", "invalid schema", 422, false},
-		{"rate limit", `{"error":{"message":"quota exhausted","type":"rate_limit_error"}}`, "rate_limit_error", "quota exhausted", 429, true},
-		{"server", `{"error":{"message":"upstream broke"}}`, "api_error", "upstream broke", 500, true},
-		{"overloaded payload", `{"response":{"error":{"type":"overloaded_error","message":"busy"}}}`, "overloaded_error", "busy", 503, true},
-		{"overloaded status", `{"detail":"capacity"}`, "overloaded_error", "capacity", 529, true},
+		{"bad request detail", `{"detail":"unsupported effort"}`, "invalid_request_error", "unsupported effort", 400, 400, false},
+		{"authentication", `{"error":{"message":"token expired"}}`, "authentication_error", "token expired", 401, 401, false},
+		{"permission", `{"message":"account forbidden"}`, "permission_error", "account forbidden", 403, 403, false},
+		{"not found", `{"error":"model absent"}`, "not_found_error", "model absent", 404, 404, false},
+		{"timeout", `{"error":{"message":"request timed out"}}`, "api_error", "request timed out", 408, 408, true},
+		{"conflict", `{"detail":"try again"}`, "api_error", "try again", 409, 409, true},
+		{"too early", `{"detail":"too early"}`, "api_error", "too early", 425, 425, true},
+		{"too large", `{"detail":"image too large"}`, "request_too_large", "image too large", 413, 413, false},
+		{"unprocessable", `{"detail":"invalid schema"}`, "invalid_request_error", "invalid schema", 422, 422, false},
+		{"rate limit", `{"error":{"message":"too many requests","type":"rate_limit_error"}}`, "rate_limit_error", "too many requests", 429, 429, true},
+		{"quota exhausted", `{"error":{"message":"quota exhausted","type":"rate_limit_error"}}`, "permission_error", "quota exhausted", 429, 403, false},
+		{"insufficient quota code", `{"error":{"code":"insufficient_quota","message":"plan limit"}}`, "permission_error", "plan limit", 429, 403, false},
+		{"usage cap", `{"error":{"message":"usage cap reached"}}`, "permission_error", "usage cap reached", 429, 403, false},
+		{"server", `{"error":{"message":"upstream broke"}}`, "api_error", "upstream broke", 500, 500, true},
+		{"overloaded payload", `{"response":{"error":{"type":"overloaded_error","message":"busy"}}}`, "overloaded_error", "busy", 503, 503, true},
+		{"overloaded status", `{"detail":"capacity"}`, "overloaded_error", "capacity", 529, 529, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := FromHTTP(tc.status, []byte(tc.body), nil)
-			if got.StatusCode != tc.status || got.Type != tc.wantType || got.Message != tc.wantMessage || got.Retryable != tc.wantRetryable {
+			if got.StatusCode != tc.wantStatus || got.Type != tc.wantType || got.Message != tc.wantMessage || got.Retryable != tc.wantRetryable {
 				t.Fatalf("FromHTTP() = %+v", got)
 			}
 			encoded, err := json.Marshal(got.AnthropicResponse())

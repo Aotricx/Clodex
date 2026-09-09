@@ -156,10 +156,24 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			engine.Retry.Failed(true)
 		}
 	}()
+	settleCancel := func() error {
+		if !settled {
+			engine.Retry.Failed(false)
+			settled = true
+		}
+		return ctx.Err()
+	}
+	settlePrepareRetry := func(err error) error {
+		if ctx.Err() != nil {
+			return settleCancel()
+		}
+		settled = true
+		return err
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return Result{}, err
+			return Result{}, settleCancel()
 		}
 		if !holdingAttempt {
 			if err := engine.Retry.Allow(); err != nil {
@@ -174,8 +188,8 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			transportErr = errors.New("Codex transport returned nil response")
 		}
 		if transportErr != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return Result{}, ctxErr
+			if ctx.Err() != nil {
+				return Result{}, settleCancel()
 			}
 			var authenticationError *upstream.AuthenticationError
 			if errors.As(transportErr, &authenticationError) {
@@ -190,7 +204,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryNetwork, Attempt: attempts, Event: redactedMessage(transportErr.Error())})
 			if err := engine.prepareRetry(ctx, transientRetriesUsed+1, "", true); err != nil {
-				return Result{}, err
+				return Result{}, settlePrepareRetry(err)
 			}
 			holdingAttempt = false
 			transientRetriesUsed++
@@ -213,7 +227,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 				if ok {
 					engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryEffortFloor, Attempt: attempts})
 					if err := engine.prepareRetry(ctx, 1, "", false); err != nil {
-						return Result{}, err
+						return Result{}, settlePrepareRetry(err)
 					}
 					current = floored
 					effortFloored = true
@@ -228,7 +242,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryHTTP, Attempt: attempts})
 			if err := engine.prepareRetry(ctx, transientRetriesUsed+1, mapped.RetryAfter, true); err != nil {
-				return Result{}, err
+				return Result{}, settlePrepareRetry(err)
 			}
 			holdingAttempt = false
 			transientRetriesUsed++
@@ -244,8 +258,8 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			attempt.result.Timing.Total = engine.now().Sub(runStart)
 			return attempt.result, nil
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return Result{}, ctxErr
+		if ctx.Err() != nil {
+			return Result{}, settleCancel()
 		}
 
 		if attempt.committed {
@@ -264,7 +278,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 			}
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryEmptyCompletion, Attempt: attempts, Event: attempt.retryEvent})
 			if retryErr := engine.prepareRetry(ctx, emptyRetriesUsed+1, "", false); retryErr != nil {
-				return Result{}, retryErr
+				return Result{}, settlePrepareRetry(retryErr)
 			}
 			emptyRetriesUsed++
 			continue
@@ -273,7 +287,7 @@ func (engine *Engine) Run(ctx context.Context, request Request, hooks StreamHook
 		if errors.As(err, &apiError) && apiError.Failure.Retryable && transientRetriesUsed < maxTransientRetries {
 			engine.dump(ctx, request.Session, current, DumpTrigger{Reason: RetryStream, Attempt: attempts, Event: attempt.retryEvent})
 			if retryErr := engine.prepareRetry(ctx, transientRetriesUsed+1, apiError.Failure.RetryAfter, true); retryErr != nil {
-				return Result{}, retryErr
+				return Result{}, settlePrepareRetry(retryErr)
 			}
 			holdingAttempt = false
 			transientRetriesUsed++
@@ -352,9 +366,6 @@ func (engine *Engine) consume(ctx context.Context, streaming bool, response *htt
 	for {
 		upstreamEvent, err := parser.Next()
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return attemptResult{committed: committed}, ctxErr
-			}
 			if final != nil {
 				timing := Timing{TransportWait: transportWait}
 				if !firstEventAt.IsZero() {
@@ -364,6 +375,9 @@ func (engine *Engine) consume(ctx context.Context, streaming bool, response *htt
 					timing.Commit = commitAt.Sub(headersAt)
 				}
 				return attemptResult{result: Result{Response: *final, Events: allEvents, Headers: headers, Timing: timing}, committed: committed}, nil
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return attemptResult{committed: committed}, ctxErr
 			}
 			return attemptResult{committed: committed, retryEvent: retryEvent}, networkError(err)
 		}

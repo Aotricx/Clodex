@@ -15,6 +15,18 @@ import (
 	"time"
 )
 
+const e2eCheapModel = "gpt-5.6-luna:low"
+const e2eXhighModel = "gpt-5.6-sol:xhigh"
+
+func TestE2EUsesLiveCatalogModels(t *testing.T) {
+	if e2eCheapModel != "gpt-5.6-luna:low" {
+		t.Fatalf("e2eCheapModel=%q want gpt-5.6-luna:low (gpt-5.4-mini:low is absent from the live Codex catalog)", e2eCheapModel)
+	}
+	if e2eXhighModel != "gpt-5.6-sol:xhigh" {
+		t.Fatalf("e2eXhighModel=%q want gpt-5.6-sol:xhigh", e2eXhighModel)
+	}
+}
+
 type transcriptFacts struct {
 	Result             string
 	Success            bool
@@ -46,7 +58,7 @@ func TestClaudeCodeE2E(t *testing.T) {
 	}
 
 	t.Run("luna image tool round trip", func(t *testing.T) {
-		facts := runClodexClaude(t, binary, port, "gpt-5.6-luna:low", "", []string{
+		facts := runClodexClaude(t, binary, port, e2eCheapModel, "", []string{
 			"--print", "Use the Read tool on " + imagePath + ". Then identify the dog breed. You must inspect the image; answer with breed and confidence.",
 			"--output-format", "stream-json", "--verbose", "--include-partial-messages",
 			"--tools", "Read", "--add-dir", filepath.Dir(imagePath), "--dangerously-skip-permissions", "--max-budget-usd", "2",
@@ -77,7 +89,7 @@ func TestClaudeCodeE2E(t *testing.T) {
 		const attempts = 3
 		thinkingSeen := false
 		for attempt := 1; attempt <= attempts; attempt++ {
-			facts := runClodexClaude(t, binary, port, "gpt-5.6-sol:xhigh", dir, []string{
+			facts := runClodexClaude(t, binary, port, e2eXhighModel, dir, []string{
 				"--print", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
 				"--tools", "Read", "--dangerously-skip-permissions", "--bare",
 				"--system-prompt", "Follow the task exactly. Use available tools. Think carefully.", "--max-budget-usd", "2",

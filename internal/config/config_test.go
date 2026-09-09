@@ -268,6 +268,27 @@ func TestLoadServeHelpUnwrapsFlagErrHelpAndIncludesUsage(t *testing.T) {
 	}
 }
 
+func TestLoadServeCLIPortParsesBase10DecimalOnly(t *testing.T) {
+	t.Run("leading zero is decimal ten not octal eight", func(t *testing.T) {
+		got, err := LoadServe([]string{"--port", "010"}, envLookup(nil))
+		if err != nil {
+			t.Fatalf("LoadServe() error = %v", err)
+		}
+		if got.Port != 10 {
+			t.Fatalf("Port = %d, want 10 (decimal), not octal 8", got.Port)
+		}
+	})
+	t.Run("hexadecimal is rejected", func(t *testing.T) {
+		_, err := LoadServe([]string{"--port", "0x21"}, envLookup(nil))
+		if err == nil {
+			t.Fatal("LoadServe() error = nil, want error rejecting hex port")
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "port") {
+			t.Fatalf("LoadServe() error = %q, want it to name port", err)
+		}
+	})
+}
+
 func TestLoadServeRejectsInvalidArguments(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -277,18 +277,55 @@ func TestManagerResolutionOrderAndHonestTelemetry(t *testing.T) {
 		}
 	})
 
-	t.Run("identity-mismatched stale cache is not used", func(t *testing.T) {
+	t.Run("identity-mismatched valid cache is used when live fails", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "models.json")
 		cached := validCatalog()
-		cached.ClientVersion = "0.143.0"
+		cached.ClientVersion = "0.150.0"
+		cached.FetchedAt = now.Add(-time.Hour)
+		cached.Models[0].Slug = "stale-mismatch"
 		if err := Save(path, cached); err != nil {
 			t.Fatal(err)
 		}
-		manager, _, closeServer := liveManager(t, now, path, http.StatusServiceUnavailable, `{"detail":"offline"}`)
+		manager, calls, closeServer := liveManager(t, now, path, http.StatusServiceUnavailable, `{"detail":"offline"}`)
 		defer closeServer()
 		got, err := manager.Resolve(context.Background())
-		if err != nil || got.Source != SourceFallback || got.CacheError == nil || got.LiveError == nil || !strings.Contains(got.CacheError.Error(), "client version") {
+		if err != nil || got.Source != SourceCache || got.Age != time.Hour || got.Catalog.Models[0].Slug != "stale-mismatch" || got.LiveError == nil || got.CacheError != nil {
 			t.Fatalf("Resolve() = %#v, %v", got, err)
+		}
+		if calls.Load() != 1 || !strings.Contains(got.LiveError.Error(), "offline") {
+			t.Fatalf("calls/error = %d/%v", calls.Load(), got.LiveError)
+		}
+	})
+
+	t.Run("imported Codex CLI cache without backend is used when live fails", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "models.json")
+		imported := `{
+			"fetched_at":"2026-07-21T17:00:00Z",
+			"etag":"etag-cli",
+			"client_version":"0.150.0",
+			"models":[{
+				"slug":"codex-150-cache",
+				"display_name":"Codex CLI Cache",
+				"description":"Imported Codex CLI models cache.",
+				"default_reasoning_level":"medium",
+				"supported_reasoning_levels":[{"effort":"medium"}],
+				"context_window":100,
+				"max_context_window":200,
+				"effective_context_window_percent":95,
+				"input_modalities":["text"]
+			}]
+		}`
+		if err := os.WriteFile(path, []byte(imported), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		manager, calls, closeServer := liveManager(t, now, path, http.StatusServiceUnavailable, `{"detail":"offline"}`)
+		defer closeServer()
+		got, err := manager.Resolve(context.Background())
+		if err != nil || got.Source != SourceCache || got.Age != time.Hour || got.Catalog.Models[0].Slug != "codex-150-cache" || got.Catalog.ClientVersion != "0.150.0" || got.Catalog.Backend != "" || got.LiveError == nil || got.CacheError != nil {
+			t.Fatalf("Resolve() = %#v, %v", got, err)
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("network calls = %d", calls.Load())
 		}
 	})
 

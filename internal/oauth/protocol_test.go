@@ -431,3 +431,64 @@ func TestZeroValueClientHTTPClientIsNotDefaultClient(t *testing.T) {
 		t.Fatal("zero-value Client httpClient() has no Timeout")
 	}
 }
+
+func TestDefaultHTTPClientCheckRedirectUsesLastResponse(t *testing.T) {
+	got := (&Client{}).httpClient()
+	if got.CheckRedirect == nil {
+		t.Fatal("defaultHTTPClient.CheckRedirect is nil")
+	}
+	err := got.CheckRedirect(&http.Request{}, nil)
+	if !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("CheckRedirect() = %v, want http.ErrUseLastResponse", err)
+	}
+}
+
+func TestTokenRefreshAndDeviceDoNotFollowRedirects(t *testing.T) {
+	var leakHits int
+	leak := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leakHits++
+		io.WriteString(w, `{"id_token":"id","access_token":"access","refresh_token":"refresh","device_auth_id":"device-id","user_code":"ABCD-EFGH","interval":"2"}`)
+	}))
+	defer leak.Close()
+
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", leak.URL+r.URL.Path)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer issuer.Close()
+
+	c := Client{Issuer: issuer.URL, ClientID: "client"}
+	ctx := context.Background()
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"exchange", func() error {
+			_, err := c.ExchangeCode(ctx, "auth-code", "http://localhost/callback", PKCE{Verifier: "code-verifier-secret"})
+			return err
+		}},
+		{"refresh", func() error {
+			_, err := c.Refresh(ctx, "refresh-token-secret")
+			return err
+		}},
+		{"device", func() error {
+			_, err := c.StartDevice(ctx)
+			return err
+		}},
+	}
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			var httpErr *HTTPError
+			if !errors.As(err, &httpErr) {
+				t.Fatalf("error type = %T: %v", err, err)
+			}
+			if httpErr.StatusCode != http.StatusTemporaryRedirect {
+				t.Fatalf("status = %d, want %d; err = %v", httpErr.StatusCode, http.StatusTemporaryRedirect, err)
+			}
+		})
+	}
+	if leakHits != 0 {
+		t.Fatalf("followed redirect %d times", leakHits)
+	}
+}

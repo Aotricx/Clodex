@@ -102,6 +102,7 @@ func TestReleaseWorkflowBuildsAndVerifiesExactAssetSet(t *testing.T) {
 	for _, required := range []string{
 		"- 'v*'", "CGO_ENABLED=0", "-trimpath", "-X main.version=${GITHUB_REF_NAME}",
 		"gh release create", "--draft", "gh release edit", "--draft=false", "sha256sum --check",
+		"gofmt -l", "go test -race ./...",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("release.yml missing %q", required)
@@ -138,6 +139,45 @@ func TestReleaseWorkflowBuildsAndVerifiesExactAssetSet(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowGatesPublishOnUbuntuTests(t *testing.T) {
+	release := readRepoFile(t, filepath.Join(".github", "workflows", "release.yml"))
+	testWF := readRepoFile(t, filepath.Join(".github", "workflows", "test.yml"))
+	setupGoPin := firstSetupGoPin(t, testWF)
+
+	jobs := workflowJobBodies(release)
+	var testJobIDs []string
+	for id, body := range jobs {
+		if strings.Contains(body, "gofmt -l") &&
+			strings.Contains(body, "go test -race ./...") &&
+			strings.Contains(body, "runs-on: ubuntu-latest") &&
+			strings.Contains(body, setupGoPin) {
+			testJobIDs = append(testJobIDs, id)
+		}
+	}
+	sort.Strings(testJobIDs)
+	if len(testJobIDs) != 1 {
+		t.Fatalf("release.yml want one ubuntu test job with gofmt, go test -race ./..., and test.yml setup-go pin; found %v", testJobIDs)
+	}
+	testJobID := testJobIDs[0]
+
+	var publishID string
+	for id, body := range jobs {
+		if strings.Contains(body, "gh release create") {
+			publishID = id
+			break
+		}
+	}
+	if publishID == "" {
+		t.Fatal("release.yml missing publish job (gh release create)")
+	}
+	if publishID == testJobID {
+		t.Fatal("ubuntu tests and publish must be separate jobs")
+	}
+	if !jobNeeds(jobs[publishID], testJobID) {
+		t.Fatalf("job %q must needs: %q so publish cannot run while tests are red", publishID, testJobID)
+	}
+}
+
 func readRepoFile(t *testing.T, path ...string) string {
 	t.Helper()
 	parts := append([]string{"..", ".."}, path...)
@@ -165,4 +205,75 @@ func workflowUsesLine(line string) (usesValue string, ok bool) {
 		return "", false
 	}
 	return strings.TrimSpace(strings.TrimPrefix(line, "uses:")), true
+}
+
+func firstSetupGoPin(t *testing.T, workflow string) string {
+	t.Helper()
+	for _, line := range strings.Split(workflow, "\n") {
+		uses, ok := workflowUsesLine(line)
+		if ok && strings.HasPrefix(uses, "actions/setup-go@") {
+			return uses
+		}
+	}
+	t.Fatal("workflow missing actions/setup-go pin")
+	return ""
+}
+
+func workflowJobBodies(contents string) map[string]string {
+	jobs := make(map[string]string)
+	inJobs := false
+	current := ""
+	var body strings.Builder
+	flush := func() {
+		if current == "" {
+			return
+		}
+		jobs[current] = body.String()
+		body.Reset()
+	}
+	for _, line := range strings.Split(contents, "\n") {
+		if !inJobs {
+			if line == "jobs:" {
+				inJobs = true
+			}
+			continue
+		}
+		if isWorkflowJobIDLine(line) {
+			flush()
+			current = strings.TrimSuffix(strings.TrimSpace(line), ":")
+			continue
+		}
+		if current != "" {
+			body.WriteString(line)
+			body.WriteByte('\n')
+		}
+	}
+	flush()
+	return jobs
+}
+
+func isWorkflowJobIDLine(line string) bool {
+	if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "    ") {
+		return false
+	}
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasSuffix(trimmed, ":") {
+		return false
+	}
+	key := strings.TrimSuffix(trimmed, ":")
+	return key != "" && !strings.ContainsAny(key, " \t")
+}
+
+func jobNeeds(body, dep string) bool {
+	header, _, found := strings.Cut(body, "\n    steps:")
+	if !found {
+		header = body
+	}
+	for _, line := range strings.Split(header, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "needs: "+dep || trimmed == "- "+dep {
+			return true
+		}
+	}
+	return false
 }

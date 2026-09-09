@@ -127,13 +127,47 @@ func TestParserTreatsTrailingCommentAfterTerminalAsEOF(t *testing.T) {
 	}
 }
 
+func TestParserDispatchesCompleteEventAtEOFWithoutTrailingBlankLine(t *testing.T) {
+	input := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}"
+	p := New(context.Background(), strings.NewReader(input), Options{})
+	event, err := p.Next()
+	if err != nil || event.Type != TypeResponseCompleted || !event.Terminal() {
+		t.Fatalf("terminal = %#v, %v", event, err)
+	}
+	if !p.TerminalSeen() {
+		t.Fatal("TerminalSeen = false, want true")
+	}
+	if _, err := p.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after complete EOF event = %v, want io.EOF", err)
+	}
+}
+
+func TestParserTreatsErrorEventAsKnownTerminal(t *testing.T) {
+	input := "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"boom\"}}\n\n"
+	p := New(context.Background(), strings.NewReader(input), Options{})
+	event, err := p.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "error" || !event.Known() || !event.Terminal() {
+		t.Fatalf("error event = %#v known=%v terminal=%v", event, event.Known(), event.Terminal())
+	}
+	if !p.TerminalSeen() {
+		t.Fatal("TerminalSeen = false, want true")
+	}
+	if _, err := p.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after error = %v, want io.EOF", err)
+	}
+}
+
 func TestParserDistinguishesTruncatedAndTerminalLessEOF(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
 		want  error
 	}{
-		{name: "truncated frame", input: "event: response.output_text.delta\ndata: {}", want: ErrTruncatedFrame},
+		{name: "truncated frame", input: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\"", want: ErrTruncatedFrame},
+		{name: "complete json without blank line", input: "event: response.output_text.delta\ndata: {}", want: ErrEOFWithoutTerminal},
 		{name: "no terminal", input: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n", want: ErrEOFWithoutTerminal},
 		{name: "empty", input: "", want: ErrEOFWithoutTerminal},
 	}

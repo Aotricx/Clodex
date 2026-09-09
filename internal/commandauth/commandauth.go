@@ -145,6 +145,29 @@ func (s *Service) Status(ctx context.Context, format StatusFormat) (auth.Summary
 	return summary, nil
 }
 
+// Logout atomically removes persisted Codex auth.json tokens.
+func (s *Service) Logout(ctx context.Context) error {
+	if s == nil {
+		return errors.New("auth service is nil")
+	}
+	if ctx == nil {
+		return errors.New("auth context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.Store == nil {
+		return errors.New("auth store is nil")
+	}
+	if s.Store.Path == "" {
+		return errors.New("auth store path is empty")
+	}
+	if err := os.Remove(s.Store.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return safeWrap("logout", err)
+	}
+	return nil
+}
+
 func (s *Service) validateLogin(ctx context.Context) error {
 	if s == nil {
 		return errors.New("auth service is nil")

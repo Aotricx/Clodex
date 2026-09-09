@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Aotricx/Clodex/internal/auth"
@@ -36,6 +37,8 @@ type Paths struct {
 
 // DefaultPaths resolves Codex's shared auth/catalog locations and Clodex's
 // private diagnostic directory without trusting a mutable HOME variable.
+// When CODEX_HOME is a non-empty directory, auth.json and models_cache.json
+// live directly under it. The dump directory still uses the user home.
 func DefaultPaths(userHomeDir func() (string, error)) (Paths, error) {
 	if userHomeDir == nil {
 		userHomeDir = os.UserHomeDir
@@ -47,9 +50,16 @@ func DefaultPaths(userHomeDir func() (string, error)) (Paths, error) {
 	if home == "" {
 		return Paths{}, errors.New("resolve Clodex home directory: empty path")
 	}
+	dump := filepath.Join(home, ".clodex", "wire")
+	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
+		return Paths{
+			Auth: filepath.Join(codexHome, "auth.json"), Catalog: filepath.Join(codexHome, "models_cache.json"),
+			Dump: dump,
+		}, nil
+	}
 	return Paths{
 		Auth: filepath.Join(home, ".codex", "auth.json"), Catalog: filepath.Join(home, ".codex", "models_cache.json"),
-		Dump: filepath.Join(home, ".clodex", "wire"),
+		Dump: dump,
 	}, nil
 }
 
@@ -63,6 +73,9 @@ type ServeOptions struct {
 	HomeDir     func() (string, error)
 	Stderr      io.Writer
 	Ready       func(net.Addr)
+	// Entropy supplies retry jitter. Serve probes it once at start and fails
+	// closed if a value cannot be read. Nil uses crypto/rand.
+	Entropy io.Reader
 }
 
 // Serve composes OAuth, catalog discovery, translation, transport, retry,
@@ -124,12 +137,28 @@ func Serve(ctx context.Context, options ServeOptions) error {
 	if err != nil {
 		return fmt.Errorf("start Clodex: tokenizer: %w", err)
 	}
+	entropy := options.Entropy
+	if entropy == nil {
+		entropy = cryptorand.Reader
+	}
+	if _, err := cryptoFloat64(entropy); err != nil {
+		return fmt.Errorf("start Clodex: random source: %w", err)
+	}
 	retryController, err := retry.NewReal(retry.Config{
 		BaseDelay: options.Config.RetryBaseDelay, MaxDelay: options.Config.RetryMaxDelay,
 		RetryAfterLimit: 5 * time.Minute, Budget: options.Config.GlobalRetryBudget,
 		BudgetWindow: options.Config.RetryBudgetWindow, FailureThreshold: options.Config.CircuitFailureThreshold,
 		CircuitCooldown: options.Config.CircuitCooldown,
-	}, cryptoFloat64)
+	}, func() float64 {
+		value, err := cryptoFloat64(entropy)
+		if err != nil {
+			// Mid-process entropy failure cannot abort an in-flight retry
+			// delay; 0.5 is equal-jitter's midpoint. Serve already failed
+			// closed if the start probe could not read entropy.
+			return 0.5
+		}
+		return value
+	})
 	if err != nil {
 		return fmt.Errorf("start Clodex: retry controller: %w", err)
 	}
@@ -162,16 +191,26 @@ func Serve(ctx context.Context, options ServeOptions) error {
 		Version: options.Version, Status: state, Catalog: catalogManager, Counter: counter,
 		DefaultModel: options.Config.Model, Messages: messages,
 		BeforeStatus: func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return refreshAuthStatus(store, state)
+			return refreshHTTPStatus(ctx, store, state, retryController)
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("start Clodex: HTTP handler: %w", err)
 	}
 	return server.Serve(ctx, options.Config.Port, handler, options.Ready)
+}
+
+func refreshHTTPStatus(ctx context.Context, store *auth.Store, state *clodexstatus.State, retryController *retry.Controller) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := refreshAuthStatus(store, state); err != nil {
+		return err
+	}
+	if retryController != nil {
+		syncRetryStatus(state, retryController.Snapshot())
+	}
+	return nil
 }
 
 func refreshAuthStatus(store *auth.Store, state *clodexstatus.State) error {
@@ -198,12 +237,15 @@ func syncRetryStatus(state *clodexstatus.State, snapshot retry.Snapshot) {
 	})
 }
 
-func cryptoFloat64() float64 {
+func cryptoFloat64(entropy io.Reader) (float64, error) {
+	if entropy == nil {
+		entropy = cryptorand.Reader
+	}
 	var buffer [8]byte
-	if _, err := io.ReadFull(cryptorand.Reader, buffer[:]); err != nil {
-		return 0.5
+	if _, err := io.ReadFull(entropy, buffer[:]); err != nil {
+		return 0, err
 	}
 	const mantissaBits = 53
 	value := binary.LittleEndian.Uint64(buffer[:]) >> (64 - mantissaBits)
-	return float64(value) / float64(uint64(1)<<mantissaBits)
+	return float64(value) / float64(uint64(1)<<mantissaBits), nil
 }

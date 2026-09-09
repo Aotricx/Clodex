@@ -52,7 +52,7 @@ func TestParseEventNormalizesLimitNameAndExplicitExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.LimitID != "codex_sonic" || !CreditsExhausted(snapshot) || snapshot.Credits.Balance == nil || *snapshot.Credits.Balance != "0" {
+	if snapshot.LimitID != "codex_sonic" || snapshot.LimitName != "Codex-Sonic" || !CreditsExhausted(snapshot) || snapshot.Credits.Balance == nil || *snapshot.Credits.Balance != "0" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 
@@ -62,11 +62,39 @@ func TestParseEventNormalizesLimitNameAndExplicitExhaustion(t *testing.T) {
 	}
 }
 
+func TestParseEventSkipsWindowWhenUsedPercentMissing(t *testing.T) {
+	raw := []byte(`{"type":"codex.rate_limits","rate_limits":{"limit_reached":true,"primary":{"window_minutes":60,"reset_after_seconds":100},"secondary":{"used_percent":12.5,"window_minutes":1440}}}`)
+	snapshot, err := ParseEvent(raw, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Primary != nil {
+		t.Fatalf("missing used_percent should skip primary, got %#v", snapshot.Primary)
+	}
+	if !snapshot.LimitReached || snapshot.Secondary == nil || snapshot.Secondary.UsedPercent != 12.5 || snapshot.Secondary.WindowMinutes == nil || *snapshot.Secondary.WindowMinutes != 1440 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestParseEventDoesNotFailWhenCreditsFieldsAreIncomplete(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"codex.rate_limits","rate_limits":{"limit_reached":true,"primary":{"used_percent":50}},"credits":{"has_credits":true}}`,
+		`{"type":"codex.rate_limits","credits":{"unlimited":true,"balance":"1"}}`,
+	} {
+		snapshot, err := ParseEvent([]byte(raw), time.Time{})
+		if err != nil {
+			t.Fatalf("ParseEvent(%s) error = %v", raw, err)
+		}
+		if snapshot.Credits != nil {
+			t.Fatalf("incomplete credits should be omitted, got %#v from %s", snapshot.Credits, raw)
+		}
+	}
+}
+
 func TestParseEventRejectsWrongTypeMalformedAndNonfiniteData(t *testing.T) {
 	for _, raw := range []string{
 		`{"type":"response.completed"}`,
 		`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":"NaN"}}}`,
-		`{"type":"codex.rate_limits","credits":{"has_credits":true}}`,
 		`not-json`,
 	} {
 		if _, err := ParseEvent([]byte(raw), time.Time{}); err == nil {

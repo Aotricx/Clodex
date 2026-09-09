@@ -30,7 +30,12 @@ const (
 	defaultHTTPTimeout    = 30 * time.Second
 )
 
-var defaultHTTPClient = &http.Client{Timeout: defaultHTTPTimeout}
+var defaultHTTPClient = &http.Client{
+	Timeout: defaultHTTPTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 type PKCE struct {
 	Verifier  string

@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,6 +50,7 @@ func TestRunAuthCommands(t *testing.T) {
 		{command: "login", want: "login"},
 		{command: "device", want: "device"},
 		{command: "status", want: "status"},
+		{command: "logout", want: "logout"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
@@ -55,6 +59,7 @@ func TestRunAuthCommands(t *testing.T) {
 			deps.authLogin = func(context.Context, io.Writer) error { called = "login"; return nil }
 			deps.authDevice = func(context.Context, io.Writer) error { called = "device"; return nil }
 			deps.authStatus = func(context.Context, io.Writer) error { called = "status"; return nil }
+			deps.authLogout = func(context.Context, io.Writer) error { called = "logout"; return nil }
 			if err := run(context.Background(), []string{"auth", test.command}, deps); err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +103,9 @@ func TestRunMetadataAndErrors(t *testing.T) {
 	}{
 		{name: "version", args: []string{"version"}, contains: "test-version"},
 		{name: "licenses", args: []string{"licenses"}, contains: "Third-Party Notices"},
-		{name: "help", args: []string{"help"}, contains: "clodex serve"},
+		{name: "help", args: []string{"help"}, contains: "clodex auth logout"},
+		{name: "auth help", args: []string{"auth", "--help"}, contains: "clodex auth logout"},
+		{name: "claude help", args: []string{"claude", "--help"}, contains: "clodex claude"},
 		{name: "no command", wantErr: "command is required"},
 		{name: "unknown", args: []string{"wat"}, wantErr: "unknown command"},
 		{name: "extra version arg", args: []string{"version", "extra"}, wantErr: "version takes no arguments"},
@@ -179,6 +186,51 @@ func TestRequireCodexAuthRejectsCorruptFile(t *testing.T) {
 	}
 }
 
+func TestHandleRunErrorQuietOnCanceledContext(t *testing.T) {
+	var stderr bytes.Buffer
+	code := handleRunError(&stderr, fmt.Errorf("run Claude Code: claude exited: %w", context.Canceled))
+	if code != 130 {
+		t.Fatalf("exit code = %d, want 130", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("canceled context wrote stderr %q", stderr.String())
+	}
+}
+
+func TestHandleRunErrorPrintsNonCancelFailures(t *testing.T) {
+	var stderr bytes.Buffer
+	err := errors.New("serve failed")
+	code := handleRunError(&stderr, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "clodex: serve failed") {
+		t.Fatalf("stderr = %q, want clodex: serve failed", got)
+	}
+}
+
+func TestErrorExitCodeMapsSignaledChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signal wait status is not available")
+	}
+	if os.Getenv("CLODEX_SIGNAL_EXIT_HELPER") == "1" {
+		select {}
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestErrorExitCodeMapsSignaledChild$")
+	cmd.Env = append(os.Environ(), "CLODEX_SIGNAL_EXIT_HELPER=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	err := cmd.Wait()
+	code := errorExitCode(fmt.Errorf("run Claude Code: claude exited: %w", err))
+	if code != 128+int(syscall.SIGKILL) {
+		t.Fatalf("errorExitCode() = %d, want %d from %v", code, 128+int(syscall.SIGKILL), err)
+	}
+}
+
 func TestRunPropagatesSubcommandFailure(t *testing.T) {
 	want := errors.New("serve failed")
 	deps := testCLIDependencies()
@@ -196,6 +248,7 @@ func testCLIDependencies() cliDependencies {
 		authLogin:  func(context.Context, io.Writer) error { return nil },
 		authDevice: func(context.Context, io.Writer) error { return nil },
 		authStatus: func(context.Context, io.Writer) error { return nil },
+		authLogout: func(context.Context, io.Writer) error { return nil },
 		claude:     func(context.Context, []string, config.Config) error { return nil },
 	}
 }

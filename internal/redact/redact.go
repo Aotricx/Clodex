@@ -21,12 +21,13 @@ const Marker = "<redacted>"
 var (
 	bearerPattern           = regexp.MustCompile(`(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/\-=]+`)
 	jwtPattern              = regexp.MustCompile(`[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+	apiKeyPattern           = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}`)
 	textDoubleQuotedPattern = regexp.MustCompile(textSecretPrefix + `"[^"\r\n]*"`)
 	textSingleQuotedPattern = regexp.MustCompile(textSecretPrefix + `'[^'\r\n]*'`)
 	textBarePattern         = regexp.MustCompile(textSecretPrefix + `[^\s,;&"']+`)
 )
 
-const textSecretPrefix = `(?i)(^|[^A-Za-z0-9_-])((?:"|')?(?:token|auth[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|cookie|set[-_]?cookie|(?:(?:chatgpt|openai)[-_]?)?account[-_]?id|email|client[-_]?secret|password|code[-_]?verifier)(?:"|')?[ \t]*[:=][ \t]*)`
+const textSecretPrefix = `(?i)(^|[^A-Za-z0-9])((?:"|')?(?:token|auth[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|cookie|set[-_]?cookie|(?:(?:chatgpt|openai)[-_]?)?account[-_]?id|email|client[-_]?secret|password|code[-_]?verifier)(?:"|')?[ \t]*[:=][ \t]*)`
 
 var sensitiveFieldNames = map[string]struct{}{
 	"accesstoken":        {},
@@ -77,6 +78,10 @@ func Headers(source http.Header) http.Header {
 			continue
 		}
 		for i, value := range values {
+			if urlHeaderName(name) {
+				clone[name][i] = redactURLHeader(value)
+				continue
+			}
 			clone[name][i] = Text(value)
 		}
 	}
@@ -157,6 +162,7 @@ func Text(source string) string {
 	redacted = textSingleQuotedPattern.ReplaceAllString(redacted, "${1}${2}'"+Marker+"'")
 	redacted = textBarePattern.ReplaceAllString(redacted, "${1}${2}"+Marker)
 	redacted = bearerPattern.ReplaceAllString(redacted, "${1}"+Marker)
+	redacted = apiKeyPattern.ReplaceAllString(redacted, Marker)
 	return redactJWTs(redacted)
 }
 
@@ -292,6 +298,18 @@ func isJWT(candidate string) bool {
 		}
 	}
 	return true
+}
+
+func urlHeaderName(name string) bool {
+	return strings.EqualFold(name, "Location") || strings.EqualFold(name, "Referer")
+}
+
+func redactURLHeader(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return Text(value)
+	}
+	return URL(parsed).String()
 }
 
 func sensitiveHeaderName(name string) bool {
