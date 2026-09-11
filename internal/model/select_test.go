@@ -435,3 +435,36 @@ func fallbackCatalog(t *testing.T) catalog.Catalog {
 	}
 	return cat
 }
+
+func TestResolveAstra(t *testing.T) {
+	cat := fallbackCatalog(t)
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max", "ultra"} {
+		for _, suffix := range []string{"", ":fast"} {
+			canonical := "gpt-6-astra:" + effort + suffix
+			t.Run(canonical, func(t *testing.T) {
+				for _, id := range []string{canonical, ClaudeCodeID(canonical), ClaudeCarrierID(canonical)} {
+					got, err := Resolve(cat, id, "gpt-5.6-sol:medium", 0)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got.CanonicalID() != canonical {
+						t.Fatalf("Resolve(%q) = %q, want %q", id, got.CanonicalID(), canonical)
+					}
+					if got.Fast != (suffix != "") || got.Fast && got.ServiceTier != "priority" {
+						t.Fatalf("selection = %+v", got)
+					}
+				}
+			})
+		}
+	}
+	got, err := Resolve(cat, "gpt-6-astra", "gpt-6-astra", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CanonicalID() != "gpt-6-astra:medium" || got.ServiceTier != "" {
+		t.Fatalf("default selection = %+v", got)
+	}
+	if _, err := Resolve(cat, "gpt-6-astra:none", "gpt-6-astra", 0); err == nil {
+		t.Fatal("unsupported effort accepted")
+	}
+}

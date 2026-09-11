@@ -8,8 +8,8 @@ Clodex lets you run **GPT/Codex models inside Claude Code** — same terminal ha
 use, same agentic loop, different model underneath. It's a local proxy: Claude Code speaks the
 Anthropic Messages API on one side, the ChatGPT Codex backend
 (`https://chatgpt.com/backend-api/codex`) speaks its own Responses-style protocol on the other, and
-Clodex translates faithfully between them — replaying the pinned Codex CLI `0.144.6` protocol and
-authenticating with your ChatGPT subscription OAuth credentials in the Codex CLI's shared
+Clodex translates faithfully between them, advertising Codex CLI `0.154.0` for model discovery
+and requests, and authenticating with your ChatGPT subscription OAuth credentials in the Codex CLI's shared
 `~/.codex/auth.json`. No OpenAI API-key path, no second provider, one backend. One static Go
 binary, no runtime dependencies.
 
@@ -165,6 +165,7 @@ at runtime; below is the compiled offline fallback used when discovery is unavai
 
 | Slug | Default effort | Supported efforts | `:fast` |
 | --- | --- | --- | --- |
+| `gpt-6-astra` | `medium` | low, medium, high, xhigh, max, ultra | yes |
 | `gpt-5.6-sol` | `medium` | low, medium, high, xhigh, max, ultra | yes |
 | `gpt-5.6-terra` | `medium` | low, medium, high, xhigh, max, ultra | yes |
 | `gpt-5.6-luna` | `medium` | low, medium, high, xhigh, max | yes |
@@ -172,7 +173,15 @@ at runtime; below is the compiled offline fallback used when discovery is unavai
 | `gpt-reserve` | `medium` | low, medium, high, xhigh, max | yes |
 | `codex-auto-review` | `medium` | low, medium, high, xhigh, max | yes |
 
-Every fallback model advertises a 272,000-token context window. `gpt-reserve` and
+Every fallback model advertises a 272,000-token context window. Astra also advertises
+a maximum context window of 872,000 tokens; selecting it does not expand the active window.
+
+Run Astra with `clodex claude --model gpt-6-astra` or select an explicit effort,
+for example `clodex claude --model gpt-6-astra:high:fast`. The fallback capabilities
+come from the Codex subscription catalog, which can differ from the public API.
+See [Astra verification](docs/ASTRA.md) for provenance and repeatable tests.
+
+`gpt-reserve` and
 `codex-auto-review` are marked `visibility: hide` upstream; Clodex does not filter on that field,
 so they are still listed and selectable. For your account's real list, ask a running proxy:
 
