@@ -16,7 +16,7 @@ func TestConstants(t *testing.T) {
 	if BackendURL != "https://chatgpt.com/backend-api/codex" {
 		t.Fatalf("BackendURL = %q", BackendURL)
 	}
-	if ClientVersion != "0.144.6" {
+	if ClientVersion != "0.154.0" {
 		t.Fatalf("ClientVersion = %q", ClientVersion)
 	}
 	if DefaultTTL != 5*time.Minute {
@@ -44,14 +44,16 @@ func TestLoadFallbackExactCatalog(t *testing.T) {
 		efforts                                               []string
 		priority, maxContext                                  int
 		fast, lite                                            bool
+		serviceDescription, defaultService                    string
 	}
 	want := []wantModel{
-		{"gpt-reserve", "GPT-Reserve", "Fast and affordable agentic coding model.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 3, 272000, true, true},
-		{"gpt-5.6-sol", "GPT-5.6-Sol", "Reliable agentic workhorse for everyday tasks.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 6, 272000, true, true},
-		{"gpt-5.6-terra", "GPT-5.6-Terra", "Balanced agentic coding model for everyday work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 7, 272000, true, true},
-		{"gpt-5.6-luna", "GPT-5.6-Luna", "Fast and affordable agentic coding model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 8, 272000, true, true},
-		{"gpt-5.5", "GPT-5.5", "Proven previous-generation model for coding and general work.", "xhigh", "list", []string{"low", "medium", "high", "xhigh"}, 12, 272000, true, false},
-		{"codex-auto-review", "Codex Auto Review", "Automatic approval review model for Codex.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 43, 272000, true, true},
+		{"gpt-6-astra", "GPT-6-Astra", "Our most capable model for complex, demanding work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 1, 872000, true, true, "2x speed, increased usage", ""},
+		{"gpt-reserve", "GPT-Reserve", "Fast and affordable agentic coding model.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 3, 272000, true, true, "1.5x speed, increased usage", "priority"},
+		{"gpt-5.6-sol", "GPT-5.6-Sol", "Reliable agentic workhorse for everyday tasks.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 6, 272000, true, true, "1.5x speed, increased usage", "priority"},
+		{"gpt-5.6-terra", "GPT-5.6-Terra", "Balanced agentic coding model for everyday work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 7, 272000, true, true, "1.5x speed, increased usage", "priority"},
+		{"gpt-5.6-luna", "GPT-5.6-Luna", "Fast and affordable agentic coding model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 8, 272000, true, true, "1.5x speed, increased usage", "priority"},
+		{"gpt-5.5", "GPT-5.5", "Proven previous-generation model for coding and general work.", "xhigh", "list", []string{"low", "medium", "high", "xhigh"}, 12, 272000, true, false, "1.5x speed, increased usage", "priority"},
+		{"codex-auto-review", "Codex Auto Review", "Automatic approval review model for Codex.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 43, 272000, true, true, "1.5x speed, increased usage", "priority"},
 	}
 	if len(c.Models) != len(want) {
 		t.Fatalf("len(Models) = %d, want %d", len(c.Models), len(want))
@@ -87,8 +89,8 @@ func TestLoadFallbackExactCatalog(t *testing.T) {
 		}
 		if w.fast {
 			if !reflect.DeepEqual(m.AdditionalSpeedTiers, []string{"fast"}) || len(m.ServiceTiers) != 1 ||
-				m.ServiceTiers[0] != (ServiceTier{ID: "priority", Name: "Fast", Description: "1.5x speed, increased usage"}) ||
-				m.DefaultServiceTier != "priority" {
+				m.ServiceTiers[0] != (ServiceTier{ID: "priority", Name: "Fast", Description: w.serviceDescription}) ||
+				m.DefaultServiceTier != w.defaultService {
 				t.Errorf("%s speed/service tiers mismatch: %+v %+v %q", m.Slug, m.AdditionalSpeedTiers, m.ServiceTiers, m.DefaultServiceTier)
 			}
 		} else if len(m.AdditionalSpeedTiers) != 0 || len(m.ServiceTiers) != 0 || m.DefaultServiceTier != "" {
