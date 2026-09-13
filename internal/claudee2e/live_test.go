@@ -250,3 +250,34 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+func TestClaudeCodeAstraE2E(t *testing.T) {
+	if os.Getenv("CLODEX_E2E_TESTS") == "" {
+		t.Skip("set CLODEX_E2E_TESTS=1 with CLODEX_E2E_BINARY and CLODEX_E2E_PORT to test Astra")
+	}
+	binary := os.Getenv("CLODEX_E2E_BINARY")
+	if binary == "" {
+		t.Fatal("CLODEX_E2E_BINARY is required")
+	}
+	port, err := strconv.Atoi(os.Getenv("CLODEX_E2E_PORT"))
+	if err != nil || port < 1 || port > 65535 {
+		t.Fatal("CLODEX_E2E_PORT must be a valid port")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "marker.txt")
+	const marker = "CLODEX_ASTRA_TOOL_ROUND_TRIP_OK"
+	if err := os.WriteFile(path, []byte(marker+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	facts := runClodexClaude(t, binary, port, "gpt-6-astra:medium", dir, []string{
+		"--print", "Use Read to read " + path + ". Reply with exactly its contents.",
+		"--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"--tools", "Read", "--allowedTools", "Read", "--strict-mcp-config", "--setting-sources", "",
+		"--no-session-persistence", "--system-prompt", "Follow the task exactly. Use the Read tool.",
+	})
+	if !facts.Success || strings.TrimSpace(facts.Result) != marker || !contains(facts.ToolNames, "Read") || facts.NumTurns < 2 || facts.PermissionDenials != 0 {
+		t.Fatalf("Astra facts = %#v", facts)
+	}
+	assertSaneUsage(t, facts)
+	t.Logf("Astra result=%q turns=%d tools=%v usage=%d/%d", facts.Result, facts.NumTurns, facts.ToolNames, facts.InputTokens, facts.OutputTokens)
+}
