@@ -436,35 +436,47 @@ func fallbackCatalog(t *testing.T) catalog.Catalog {
 	return cat
 }
 
-func TestResolveAstra(t *testing.T) {
+func TestResolveGPT6(t *testing.T) {
 	cat := fallbackCatalog(t)
-	for _, effort := range []string{"low", "medium", "high", "xhigh", "max", "ultra"} {
-		for _, suffix := range []string{"", ":fast"} {
-			canonical := "gpt-6-astra:" + effort + suffix
-			t.Run(canonical, func(t *testing.T) {
-				for _, id := range []string{canonical, ClaudeCodeID(canonical), ClaudeCarrierID(canonical)} {
-					got, err := Resolve(cat, id, "gpt-5.6-sol:medium", 0)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if got.CanonicalID() != canonical {
-						t.Fatalf("Resolve(%q) = %q, want %q", id, got.CanonicalID(), canonical)
-					}
-					if got.Fast != (suffix != "") || got.Fast && got.ServiceTier != "priority" {
-						t.Fatalf("selection = %+v", got)
+	for _, tc := range []struct {
+		slug, defaultEffort string
+		efforts             []string
+		unsupported         []string
+	}{
+		{"gpt-6-sol", "medium", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, []string{"none"}},
+		{"gpt-6-astra", "low", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, []string{"none"}},
+		{"gpt-6-luna", "medium", []string{"low", "medium", "high", "xhigh", "max"}, []string{"none", "ultra"}},
+	} {
+		t.Run(tc.slug, func(t *testing.T) {
+			for _, effort := range tc.efforts {
+				for _, suffix := range []string{"", ":fast"} {
+					canonical := tc.slug + ":" + effort + suffix
+					for _, id := range []string{canonical, ClaudeCodeID(canonical), ClaudeCarrierID(canonical)} {
+						got, err := Resolve(cat, id, "gpt-5.6-sol:medium", 0)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if got.CanonicalID() != canonical {
+							t.Fatalf("Resolve(%q) = %q, want %q", id, got.CanonicalID(), canonical)
+						}
+						if got.Fast != (suffix != "") || got.Fast && got.ServiceTier != "priority" {
+							t.Fatalf("selection = %+v", got)
+						}
 					}
 				}
-			})
-		}
-	}
-	got, err := Resolve(cat, "gpt-6-astra", "gpt-6-astra", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CanonicalID() != "gpt-6-astra:low" || got.ServiceTier != "" {
-		t.Fatalf("default selection = %+v", got)
-	}
-	if _, err := Resolve(cat, "gpt-6-astra:none", "gpt-6-astra", 0); err == nil {
-		t.Fatal("unsupported effort accepted")
+			}
+			got, err := Resolve(cat, tc.slug, tc.slug, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.CanonicalID() != tc.slug+":"+tc.defaultEffort || got.ServiceTier != "" {
+				t.Fatalf("default selection = %+v", got)
+			}
+			for _, effort := range tc.unsupported {
+				if _, err := Resolve(cat, tc.slug+":"+effort, tc.slug, 0); err == nil {
+					t.Fatalf("unsupported effort %q accepted", effort)
+				}
+			}
+		})
 	}
 }
