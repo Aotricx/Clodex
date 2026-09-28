@@ -618,8 +618,8 @@ func TestRunUsesShippingModelDefaults(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	assertEnv(t, command.Env, map[string]string{
-		"ANTHROPIC_MODEL":                 "gpt-5.6-sol:medium[1m]",
-		"ANTHROPIC_SMALL_FAST_MODEL":      "gpt-5.6-luna:low[1m]",
+		"ANTHROPIC_MODEL":                 "gpt-6-sol:medium[1m]",
+		"ANTHROPIC_SMALL_FAST_MODEL":      "gpt-6-luna:low[1m]",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "272000",
 	})
 }

@@ -12,8 +12,8 @@ import (
 func TestLoadServeDefaults(t *testing.T) {
 	want := Config{
 		Port:                    8484,
-		Model:                   "gpt-5.6-sol:medium",
-		SmallFastModel:          "gpt-5.6-luna:low",
+		Model:                   "gpt-6-sol:medium",
+		SmallFastModel:          "gpt-6-luna:low",
 		DebugWire:               false,
 		EmptyCompletionRetries:  10,
 		TransientRetries:        3,

@@ -122,7 +122,7 @@ Everything after `--` reaches `claude` untouched.
 
 ```sh
 clodex claude
-clodex claude --model gpt-5.6-sol:high:fast -- --print "Explain this repository"
+clodex claude --model gpt-6-sol:high:fast -- --print "Explain this repository"
 ```
 
 **4. Or run the proxy standalone** and point an existing Claude Code at it. `clodex serve` runs in
@@ -199,7 +199,7 @@ curl -s http://127.0.0.1:8484/v1/models | jq -r '.data[].id'
 ```
 
 `clodex claude` sets `ANTHROPIC_MODEL` to a canonical GPT id plus `[1m]` (for example
-`gpt-5.6-sol:medium[1m]`). Current Claude Code strips that marker itself. `/v1/models` still
+`gpt-6-sol:medium[1m]`). Current Claude Code strips that marker itself. `/v1/models` still
 lists reversible `anthropic-clodex-…[1m]` twins so older pickers keep working, and the proxy
 unwraps either form back to a catalog GPT id — a shim, not an alias policy or a context expansion.
 
@@ -208,8 +208,8 @@ unwraps either form back to a catalog GPT id — a shim, not an alias policy or 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CLODEX_PORT` | `8484` | Loopback listen port |
-| `CLODEX_MODEL` | `gpt-5.6-sol:medium` | Main model |
-| `CLODEX_SMALL_FAST_MODEL` | `gpt-5.6-luna:low` | Small/fast model |
+| `CLODEX_MODEL` | `gpt-6-sol:medium` | Main model |
+| `CLODEX_SMALL_FAST_MODEL` | `gpt-6-luna:low` | Small/fast model |
 | `CLODEX_DEBUG_WIRE` | `false` | Wire dumps are failure-triggered and redacted, written under `~/.clodex/wire`; `true` (or `--debug-wire`) records **every** request/response pair |
 | `CLODEX_EMPTY_RETRIES` | `10` | Retries for an empty upstream completion |
 | `CLODEX_TRANSIENT_RETRIES` | `3` | Retries for a transient upstream failure |
