@@ -50,8 +50,11 @@ descriptions for Astra and the older models (the 5.x models are now described as
 `gpt-5.6-luna` 6, `gpt-5.5` 7). These are Codex subscription capabilities, not
 public API model settings.
 
-Clodex's defaults (`gpt-5.6-sol:medium`, small/fast `gpt-5.6-luna:low`) are
-unchanged.
+Clodex's defaults follow upstream's lead: the main model is now
+`gpt-6-sol:medium` (upstream priority 0, the Codex CLI's own default) and the
+small/fast model is `gpt-6-luna:low`, replacing `gpt-5.6-sol:medium` and
+`gpt-5.6-luna:low`. `CLODEX_MODEL` and `CLODEX_SMALL_FAST_MODEL` still override
+both.
 
 ## Capabilities Clodex does not carry over
 
