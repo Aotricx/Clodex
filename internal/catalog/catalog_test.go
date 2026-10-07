@@ -16,7 +16,7 @@ func TestConstants(t *testing.T) {
 	if BackendURL != "https://chatgpt.com/backend-api/codex" {
 		t.Fatalf("BackendURL = %q", BackendURL)
 	}
-	if ClientVersion != "0.156.1" {
+	if ClientVersion != "0.160.1" {
 		t.Fatalf("ClientVersion = %q", ClientVersion)
 	}
 	if DefaultTTL != 5*time.Minute {
@@ -47,14 +47,15 @@ func TestLoadFallbackExactCatalog(t *testing.T) {
 		serviceDescription, defaultService                    string
 	}
 	want := []wantModel{
-		{"gpt-6-sol", "GPT-6-Sol", "Workhorse model for coding and everyday work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 0, 872000, true, true, "1.5x speed", "priority"},
-		{"gpt-6-astra", "GPT-6-Astra", "Frontier intelligence for the most demanding work.", "low", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 1, 872000, true, true, "2x speed, increased usage", "priority"},
-		{"gpt-6-luna", "GPT-6-Luna", "Fast and affordable model for easier tasks.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 3, 872000, true, true, "1.5x speed", "priority"},
-		{"gpt-reserve", "GPT-Reserve", "Fast and affordable agentic coding model.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 3, 872000, true, true, "1.5x speed, increased usage", "priority"},
-		{"gpt-5.6-sol", "GPT-5.6-Sol", "Older coding model for complex work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 4, 872000, true, true, "1.5x speed, increased usage", "priority"},
-		{"gpt-5.6-terra", "GPT-5.6-Terra", "Older balanced model for straightforward work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 5, 872000, true, true, "1.5x speed, increased usage", "priority"},
-		{"gpt-5.6-luna", "GPT-5.6-Luna", "Older fast and efficient model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 6, 872000, true, true, "1.5x speed, increased usage", "priority"},
-		{"gpt-5.5", "GPT-5.5", "Legacy coding model.", "xhigh", "list", []string{"low", "medium", "high", "xhigh"}, 7, 272000, true, false, "1.5x speed, increased usage", "priority"},
+		{"gpt-6.1-sol", "GPT-6.1-Sol", "Latest workhorse model for coding and everyday work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 0, 872000, true, true, "2x speed, increased usage", ""},
+		{"gpt-6-astra", "GPT-6-Astra", "Frontier intelligence for the most demanding work.", "low", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 2, 872000, true, true, "2x speed, increased usage", ""},
+		{"gpt-6-sol", "GPT-6-Sol", "Previous generation workhorse model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 3, 872000, true, true, "1.5x speed", ""},
+		{"gpt-6-luna", "GPT-6-Luna", "Fast and affordable model for easier tasks.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 4, 872000, true, true, "1.5x speed", ""},
+		{"gpt-reserve", "GPT-Reserve", "Fast and affordable agentic coding model.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 4, 872000, true, true, "1.5x speed, increased usage", "priority"},
+		{"gpt-5.6-sol", "GPT-5.6-Sol", "Older generation workhorse model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 5, 872000, true, true, "1.5x speed, increased usage", ""},
+		{"gpt-5.6-terra", "GPT-5.6-Terra", "Older balanced model for straightforward work.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, 6, 872000, true, true, "1.5x speed, increased usage", ""},
+		{"gpt-5.6-luna", "GPT-5.6-Luna", "Older fast and efficient model.", "medium", "list", []string{"low", "medium", "high", "xhigh", "max"}, 7, 872000, true, true, "1.5x speed, increased usage", ""},
+		{"gpt-5.5", "GPT-5.5", "Legacy coding model.", "xhigh", "hide", []string{"low", "medium", "high", "xhigh"}, 8, 272000, true, false, "1.5x speed, increased usage", ""},
 		{"codex-auto-review", "Codex Auto Review", "Automatic approval review model for Codex.", "medium", "hide", []string{"low", "medium", "high", "xhigh", "max"}, 43, 872000, true, true, "1.5x speed, increased usage", "priority"},
 	}
 	if len(c.Models) != len(want) {

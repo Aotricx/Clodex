@@ -443,6 +443,7 @@ func TestResolveGPT6(t *testing.T) {
 		efforts             []string
 		unsupported         []string
 	}{
+		{"gpt-6.1-sol", "medium", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, []string{"none"}},
 		{"gpt-6-sol", "medium", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, []string{"none"}},
 		{"gpt-6-astra", "low", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, []string{"none"}},
 		{"gpt-6-luna", "medium", []string{"low", "medium", "high", "xhigh", "max"}, []string{"none", "ultra"}},

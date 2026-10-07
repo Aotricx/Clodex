@@ -61,7 +61,7 @@ func TestClientSendsPinnedCodexHTTPContract(t *testing.T) {
 		"Authorization":       "Bearer " + credentials.AccessToken(),
 		"ChatGPT-Account-ID":  "acct_test",
 		"Originator":          "codex_cli_rs",
-		"Version":             "0.156.1",
+		"Version":             "0.160.1",
 		"Session-ID":          "11111111-1111-4111-8111-111111111111",
 		"Thread-ID":           "22222222-2222-4222-8222-222222222222",
 		"X-Client-Request-ID": "22222222-2222-4222-8222-222222222222",
@@ -73,7 +73,7 @@ func TestClientSendsPinnedCodexHTTPContract(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, value, want)
 		}
 	}
-	if userAgent := got.header.Get("User-Agent"); !strings.Contains(userAgent, "codex_cli_rs/0.156.1") ||
+	if userAgent := got.header.Get("User-Agent"); !strings.Contains(userAgent, "codex_cli_rs/0.160.1") ||
 		!strings.Contains(userAgent, runtime.GOOS) || !strings.Contains(userAgent, runtime.GOARCH) {
 		t.Errorf("User-Agent = %q", userAgent)
 	}
