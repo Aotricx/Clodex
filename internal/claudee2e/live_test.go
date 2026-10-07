@@ -263,7 +263,7 @@ func TestClaudeCodeGPT6E2E(t *testing.T) {
 	if err != nil || port < 1 || port > 65535 {
 		t.Fatal("CLODEX_E2E_PORT must be a valid port")
 	}
-	for _, model := range []string{"gpt-6-sol:medium", "gpt-6-astra:medium", "gpt-6-luna:medium"} {
+	for _, model := range []string{"gpt-6.1-sol:medium", "gpt-6-sol:medium", "gpt-6-astra:medium", "gpt-6-luna:medium"} {
 		t.Run(model, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "marker.txt")

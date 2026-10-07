@@ -31,7 +31,7 @@ type Config struct {
 func Defaults() Config {
 	return Config{
 		Port:                    8484,
-		Model:                   "gpt-6-sol:medium",
+		Model:                   "gpt-6.1-sol:medium",
 		SmallFastModel:          "gpt-6-luna:low",
 		DebugWire:               false,
 		EmptyCompletionRetries:  10,

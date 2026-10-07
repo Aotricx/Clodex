@@ -27,7 +27,7 @@ import (
 
 const (
 	DefaultEndpoint       = "https://chatgpt.com/backend-api/codex/responses"
-	CodexProtocolVersion  = "0.156.1"
+	CodexProtocolVersion  = "0.160.1"
 	defaultOriginator     = "codex_cli_rs"
 	defaultProductVersion = "0.1.0"
 	maxDumpBodyBytes      = 32 << 20

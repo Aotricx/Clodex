@@ -17,7 +17,7 @@ import (
 const (
 	BackendURL = "https://chatgpt.com/backend-api/codex"
 	// ClientVersion must match the version advertised by the Responses transport.
-	ClientVersion = "0.156.1"
+	ClientVersion = "0.160.1"
 	DefaultTTL    = 5 * time.Minute
 
 	// clockSkewTolerance permits small differences between local and server clocks.
