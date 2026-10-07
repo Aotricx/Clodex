@@ -8,7 +8,7 @@ Clodex lets you run **GPT/Codex models inside Claude Code** — same terminal ha
 use, same agentic loop, different model underneath. It's a local proxy: Claude Code speaks the
 Anthropic Messages API on one side, the ChatGPT Codex backend
 (`https://chatgpt.com/backend-api/codex`) speaks its own Responses-style protocol on the other, and
-Clodex translates faithfully between them, advertising Codex CLI `0.156.1` for model discovery
+Clodex translates faithfully between them, advertising Codex CLI `0.160.1` for model discovery
 and requests, and authenticating with your ChatGPT subscription OAuth credentials in the Codex CLI's shared
 `~/.codex/auth.json`. No OpenAI API-key path, no second provider, one backend. One static Go
 binary, no runtime dependencies.
@@ -122,7 +122,7 @@ Everything after `--` reaches `claude` untouched.
 
 ```sh
 clodex claude
-clodex claude --model gpt-6-sol:high:fast -- --print "Explain this repository"
+clodex claude --model gpt-6.1-sol:high:fast -- --print "Explain this repository"
 ```
 
 **4. Or run the proxy standalone** and point an existing Claude Code at it. `clodex serve` runs in
@@ -167,8 +167,9 @@ is the compiled offline fallback used when discovery is unavailable.
 
 | Slug | Default effort | Supported efforts | `:fast` |
 | --- | --- | --- | --- |
-| `gpt-6-sol` | `medium` | low, medium, high, xhigh, max, ultra | yes |
+| `gpt-6.1-sol` | `medium` | low, medium, high, xhigh, max, ultra | yes |
 | `gpt-6-astra` | `low` | low, medium, high, xhigh, max, ultra | yes |
+| `gpt-6-sol` | `medium` | low, medium, high, xhigh, max, ultra | yes |
 | `gpt-6-luna` | `medium` | low, medium, high, xhigh, max | yes |
 | `gpt-reserve` | `medium` | low, medium, high, xhigh, max | yes |
 | `gpt-5.6-sol` | `medium` | low, medium, high, xhigh, max, ultra | yes |
@@ -181,16 +182,18 @@ Every fallback model advertises a 272,000-token active context window. All of th
 `gpt-5.5` also advertise an 872,000-token maximum context window upstream; Clodex records that
 field but does not use it, so no model selection expands the active window.
 
-The GPT-6 family is `gpt-6-sol` (workhorse), `gpt-6-astra` (frontier), and
-`gpt-6-luna` (fast and affordable). The backend lists Sol and Luna only to
-clients advertising Codex `0.155.0` or newer, and Astra only to `0.153.0` or newer.
-Run one with, for example, `clodex claude --model gpt-6-sol:high:fast`. Astra
+The GPT-6 family is `gpt-6.1-sol` (latest workhorse, the default), `gpt-6-astra`
+(frontier), `gpt-6-sol` (previous workhorse), and `gpt-6-luna` (fast and affordable).
+The backend lists GPT-6.1 Sol only to clients advertising Codex `0.159.0` or newer,
+GPT-6 Sol and Luna only to `0.155.0` or newer, and Astra only to `0.153.0` or newer;
+Clodex advertises `0.160.1`. Run one with, for example,
+`clodex claude --model gpt-6.1-sol:high:fast`. Astra
 defaults to `low` effort upstream, so name the effort you want; Luna has no `ultra`.
 The fallback capabilities come from the Codex subscription catalog, which can
 differ from the public API. See [GPT-6 verification](docs/GPT6.md) for provenance,
 capability coverage, and repeatable tests.
 
-`gpt-reserve` and
+`gpt-reserve`, `gpt-5.5`, and
 `codex-auto-review` are marked `visibility: hide` upstream; Clodex does not filter on that field,
 so they are still listed and selectable. For your account's real list, ask a running proxy:
 
@@ -199,7 +202,7 @@ curl -s http://127.0.0.1:8484/v1/models | jq -r '.data[].id'
 ```
 
 `clodex claude` sets `ANTHROPIC_MODEL` to a canonical GPT id plus `[1m]` (for example
-`gpt-6-sol:medium[1m]`). Current Claude Code strips that marker itself. `/v1/models` still
+`gpt-6.1-sol:medium[1m]`). Current Claude Code strips that marker itself. `/v1/models` still
 lists reversible `anthropic-clodex-…[1m]` twins so older pickers keep working, and the proxy
 unwraps either form back to a catalog GPT id — a shim, not an alias policy or a context expansion.
 
@@ -208,7 +211,7 @@ unwraps either form back to a catalog GPT id — a shim, not an alias policy or 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CLODEX_PORT` | `8484` | Loopback listen port |
-| `CLODEX_MODEL` | `gpt-6-sol:medium` | Main model |
+| `CLODEX_MODEL` | `gpt-6.1-sol:medium` | Main model |
 | `CLODEX_SMALL_FAST_MODEL` | `gpt-6-luna:low` | Small/fast model |
 | `CLODEX_DEBUG_WIRE` | `false` | Wire dumps are failure-triggered and redacted, written under `~/.clodex/wire`; `true` (or `--debug-wire`) records **every** request/response pair |
 | `CLODEX_EMPTY_RETRIES` | `10` | Retries for an empty upstream completion |
